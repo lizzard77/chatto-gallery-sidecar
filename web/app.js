@@ -21,13 +21,18 @@ function currentPath() {
     .filter(Boolean);
 }
 
+// Absolute Adressen ohne Zugangsdaten: wer die Galerie als https://user:pw@host/ öffnet, bekäme
+// sonst relative URLs mit eingebetteten Zugangsdaten, und fetch() lehnt die ab. Das Login hat der
+// Browser nach dem ersten Aufruf ohnehin für die Seite gespeichert.
+const BASE = `${location.origin}${location.pathname.replace(/[^/]*$/, '')}`;
+
 const encodePath = (segments) => segments.map(encodeURIComponent).join('/');
 const folderHref = (segments) => `#/${segments.map(encodeURIComponent).join('/')}${segments.length ? '/' : ''}`;
-const fileUrl = (segments) => `files/${encodePath(segments)}`;
+const fileUrl = (segments) => `${BASE}files/${encodePath(segments)}`;
 
 function thumbUrl(segments, entry) {
   if (!THUMBABLE.test(entry.name)) return fileUrl(segments);
-  return `thumb/${encodePath(segments)}?v=${encodeURIComponent(entry.mtime || '')}`;
+  return `${BASE}thumb/${encodePath(segments)}?v=${encodeURIComponent(entry.mtime || '')}`;
 }
 
 const listings = new Map();
@@ -35,7 +40,7 @@ const listings = new Map();
 async function list(segments) {
   const key = segments.join('/');
   if (!listings.has(key)) {
-    const promise = fetch(`files/${encodePath(segments)}${segments.length ? '/' : ''}`, { cache: 'no-cache' })
+    const promise = fetch(`${BASE}files/${encodePath(segments)}${segments.length ? '/' : ''}`, { cache: 'no-cache' })
       .then((res) => {
         if (!res.ok) throw new Error(res.status === 404 ? 'Ordner nicht gefunden' : `HTTP ${res.status}`);
         return res.json();
