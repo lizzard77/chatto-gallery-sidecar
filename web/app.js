@@ -168,7 +168,7 @@ async function render({ scroll = true } = {}) {
     })))));
   }
   if (folders.length) {
-    parts.push(el('h2', { class: 'section-title' }, segments.length ? 'Ordner' : 'Charaktere'));
+    parts.push(el('h2', { class: 'section-title' }, 'Ordner'));
     parts.push(el('div', { class: 'folders' }, folders.map((e) => folderCard(segments, e))));
   }
   if (!parts.length) parts.push(el('p', { class: 'empty' }, 'Dieser Ordner ist leer.'));

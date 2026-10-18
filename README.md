@@ -4,7 +4,7 @@ Kleine Galerie für Charakterbögen neben [Chatto](https://github.com/lizzard77/
 ein Ordner mit PDF(s) und Bildern. Spieler öffnen sie als Seitenleisten-Link in einem eigenen Tab,
 gewürfelt und geredet wird weiter in Chatto.
 
-- Startseite: ein Kärtchen pro Ordner (Titelbild = `portrait.*`/`cover.*`/`titel.*`, sonst das erste Bild).
+- Startseite: ein Kärtchen pro Ordner (z. B. Kampagne → Charakter) (Titelbild = `portrait.*`/`cover.*`/`titel.*`, sonst das erste Bild).
 - Ordner: PDFs als Buttons (öffnen im PDF-Viewer des Browsers), Bilder als Raster mit Lightbox
   (Pfeiltasten, Wischen), Unterordner als Kärtchen.
 - Direktlinks per Hash, z. B. `https://files.he1.lizzard77.dev/#/Mira/` – praktisch als Link pro Spieler.
