@@ -3,7 +3,7 @@
 // Navigation über den Hash (#/Ordner/Unterordner/), damit Links auf einen Charakter gehen.
 // Ein PDF öffnet sich als #/Ordner/Datei.pdf (ohne Schrägstrich am Ende) im PDF-Viewer.
 
-import { showPdf } from './pdfviewer.js';
+import { showPdf } from './pdfviewer.js?v=2';
 
 const IMAGE = /\.(jpe?g|png|webp|gif|avif|svg|heic)$/i;
 // Diese Formate verkleinert nginx (image_filter); alles andere wird direkt geladen
