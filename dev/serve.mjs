@@ -1,6 +1,6 @@
 // Lokale Vorschau ohne Docker: liefert web/ aus und bildet die nginx-Endpunkte nach
 // (/files/<ordner>/ als JSON-Liste wie autoindex_format json, /thumb/ = Originalbild).
-//   node dev/serve.mjs [<datenordner>] [<port>]   (Standard: dev/sample, 8090)
+//   npm install && node dev/serve.mjs [<datenordner>] [<port>]   (Standard: dev/sample, 8090)
 import { createServer } from 'node:http';
 import { createReadStream } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
@@ -11,7 +11,8 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const data = process.argv[2] || join(root, 'dev/sample');
 const port = Number(process.argv[3] || 8090);
 const types = {
-    '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css',
+    '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css',
+    '.wasm': 'application/wasm',
     '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
     '.webp': 'image/webp', '.gif': 'image/gif', '.svg': 'image/svg+xml'
 };
@@ -24,6 +25,13 @@ function send(res, file) {
 createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
     const path = normalize(decodeURIComponent(url.pathname)).replace(/^(\.\.[/\\])+/, '');
+    // PDF.js wie im Image unter /vendor/pdfjs/ (vorher `npm install`)
+    const vendor = path.match(/^\/vendor\/pdfjs\/(.*)$/);
+    if (vendor) {
+        const pdfjs = join(root, 'node_modules/pdfjs-dist');
+        const file = vendor[1].endsWith('.mjs') ? join(pdfjs, 'build', vendor[1]) : join(pdfjs, vendor[1]);
+        return send(res, file);
+    }
     const match = path.match(/^\/(files|thumb)\/(.*)$/);
     if (!match) return send(res, join(root, 'web', path === '/' ? 'index.html' : path));
     const target = join(data, match[2]);

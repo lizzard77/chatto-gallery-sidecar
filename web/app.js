@@ -1,6 +1,9 @@
 // Galerie: liest Ordnerlisten als JSON (nginx autoindex_format json) unter /files/
 // und zeigt Unterordner als Karten, PDFs/Dokumente als Buttons und Bilder als Raster.
 // Navigation über den Hash (#/Ordner/Unterordner/), damit Links auf einen Charakter gehen.
+// Ein PDF öffnet sich als #/Ordner/Datei.pdf (ohne Schrägstrich am Ende) im PDF-Viewer.
+
+import { showPdf } from './pdfviewer.js';
 
 const IMAGE = /\.(jpe?g|png|webp|gif|avif|svg|heic)$/i;
 // Diese Formate verkleinert nginx (image_filter); alles andere wird direkt geladen
@@ -13,6 +16,10 @@ const lightbox = document.getElementById('lightbox');
 
 const collator = new Intl.Collator('de', { numeric: true, sensitivity: 'base' });
 const byName = (a, b) => collator.compare(a.name, b.name);
+
+/** Ist der Hash ein PDF (letztes Segment ohne Schrägstrich am Ende)? */
+const isPdfHash = () => !location.hash.endsWith('/') && PDF.test(currentPath().at(-1) ?? '');
+const fileHref = (segments) => `#/${segments.map(encodeURIComponent).join('/')}`;
 
 /** Pfadsegmente aus dem Hash, z. B. "#/Mira/Bilder/" → ["Mira", "Bilder"] */
 function currentPath() {
@@ -78,12 +85,13 @@ function renderCrumbs(segments) {
       const last = i === segments.length - 1;
       const sep = i > 0 ? [el('span', { class: 'sep' }, '›')] : [];
       return [...sep, last
-        ? el('span', { class: 'current' }, name)
+        ? el('span', { class: 'current' }, PDF.test(name) ? stripExt(name) : name)
         : el('a', { href: folderHref(segments.slice(0, i + 1)) }, name)];
     })
   );
   if (!segments.length) crumbs.replaceChildren(el('span', { class: 'current' }, 'Spielrunden'));
-  document.title = segments.length ? `${segments.at(-1)} – Spielrunden` : 'Spielrunden';
+  const title = segments.length ? segments.at(-1).replace(PDF, '') : '';
+  document.title = title ? `${title} – Spielrunden` : 'Spielrunden';
 }
 
 /** Karte für einen Unterordner; Titelbild und Zähler kommen nachträglich. */
@@ -126,9 +134,18 @@ function showImage(index) {
   if (!lightbox.open) lightbox.showModal();
 }
 
+let closePdf = null;
+
 async function render({ scroll = true } = {}) {
   const segments = currentPath();
+  closePdf?.();
+  closePdf = null;
   renderCrumbs(segments);
+  if (isPdfHash()) {
+    closePdf = showPdf(view, { base: BASE, url: fileUrl(segments), el });
+    if (scroll) window.scrollTo(0, 0);
+    return;
+  }
   let entries;
   try {
     entries = await list(segments);
@@ -152,7 +169,7 @@ async function render({ scroll = true } = {}) {
     parts.push(el('h2', { class: 'section-title' }, docs.length === 1 ? 'Dokument' : 'Dokumente'));
     parts.push(el('div', { class: 'docs' }, docs.map((e) => el('a', {
       class: PDF.test(e.name) ? 'doc' : 'doc other',
-      href: fileUrl([...segments, e.name]),
+      href: PDF.test(e.name) ? fileHref([...segments, e.name]) : fileUrl([...segments, e.name]),
       target: PDF.test(e.name) ? undefined : '_blank',
       rel: 'noopener'
     }, PDF.test(e.name) ? '📄' : '📎', stripExt(e.name), el('span', { class: 'size' }, formatSize(e.size))))));
@@ -209,7 +226,7 @@ window.addEventListener('hashchange', () => {
 // Beim Zurückkehren in den Tab (z. B. aus Chatto) neu laden, damit frisch hochgeladene
 // Dateien erscheinen – ohne Scrollposition oder offenes Bild zu verlieren
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible' || lightbox.open) return;
+  if (document.visibilityState !== 'visible' || lightbox.open || isPdfHash()) return;
   listings.clear();
   render({ scroll: false });
 });

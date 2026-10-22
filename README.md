@@ -5,20 +5,24 @@ ein Ordner mit PDF(s) und Bildern. Spieler öffnen sie als Seitenleisten-Link in
 gewürfelt und geredet wird weiter in Chatto.
 
 - Startseite: ein Kärtchen pro Ordner (z. B. Kampagne → Charakter) (Titelbild = `portrait.*`/`cover.*`/`titel.*`, sonst das erste Bild).
-- Ordner: PDFs als Buttons (öffnen im PDF-Viewer des Browsers), Bilder als Raster mit Lightbox
-  (Pfeiltasten, Wischen), Unterordner als Kärtchen.
+- Ordner: PDFs als Buttons, Bilder als Raster mit Lightbox (Pfeiltasten, Wischen), Unterordner als Kärtchen.
+- PDFs zeigt die Galerie selbst an (PDF.js, Zoom, Herunterladen-Button) – unabhängig vom PDF-Viewer des
+  Browsers, also auch im In-App-Tab einer Android-PWA, der PDFs sonst nur herunterlädt. Direktlink:
+  `#/Ordner/Datei.pdf`.
 - Direktlinks per Hash, z. B. `https://files.he1.lizzard77.dev/#/Mira/` – praktisch als Link pro Spieler.
 - Neue Dateien erscheinen ohne Neustart; beim Zurückwechseln in den Tab lädt die Seite die Liste neu.
 - Farben nach dem Nachtgold-Schema, hell/dunkel nach Systemeinstellung.
 
 ## Aufbau
 
-Nur nginx (`nginx:alpine`) und eine statische Seite, keine Datenbank, kein Build-Schritt:
+Nur nginx (`nginx:alpine`) und eine statische Seite, keine Datenbank. Einziger Build-Schritt: PDF.js
+(`pdfjs-dist`, Version in `package.json`) kommt im Docker-Build nach `/vendor/pdfjs/`, ohne CDN:
 
 | Pfad | |
 |---|---|
 | `/` | die Seite (`web/`) |
 | `/files/<pfad>/` | Ordnerliste als JSON (`autoindex_format json`), Dateien direkt |
+| `/vendor/pdfjs/` | PDF.js für die PDF-Ansicht |
 | `/thumb/<pfad>` | verkleinertes Bild (640 px, `image_filter`), 30 Tage zwischengespeichert |
 
 Alles liegt hinter HTTP Basic Auth (ein gemeinsames Login für alle Spieler). Ohne Passwortdatei
@@ -54,6 +58,7 @@ Deployment auf he1: `selfhosted-services/he1/gallery/`.
 Ohne Docker, mit einem Ordner Beispieldaten:
 
 ```sh
+npm install                                   # PDF.js für die PDF-Ansicht
 node dev/serve.mjs ~/irgendwo/galerie 8090   # http://localhost:8090/
 ```
 

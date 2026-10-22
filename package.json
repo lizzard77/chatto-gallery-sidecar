@@ -1,0 +1,8 @@
+{
+  "name": "chatto-gallery-sidecar",
+  "private": true,
+  "description": "Nur für PDF.js (wird im Docker-Build nach web/vendor/pdfjs kopiert)",
+  "dependencies": {
+    "pdfjs-dist": "6.4.299"
+  }
+}
