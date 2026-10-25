@@ -28,11 +28,15 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: nginx-Konfiguration prüfen
+      - name: Smoke-Test (Server startet, /api/me antwortet)
         run: |
           docker build -t gallery-test .
-          mkdir -p /tmp/auth && echo 'test:$apr1$x$x' > /tmp/auth/htpasswd
-          docker run --rm -v /tmp/auth:/etc/nginx/auth:ro gallery-test nginx -t
+          docker run -d --name gallery-test -e DEV_USER=Test -p 8080:8080 gallery-test
+          for i in $(seq 20); do curl -fs http://localhost:8080/api/me && break; sleep 1; done
+          curl -fs http://localhost:8080/api/me | grep -q '"name":"Test"'
+          curl -fs http://localhost:8080/ | grep -qi '<html'
+          curl -fsI http://localhost:8080/vendor/pdfjs/pdf.min.mjs
+          docker rm -f gallery-test
       - uses: docker/build-push-action@v6
         with:
           context: .

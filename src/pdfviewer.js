@@ -1,45 +1,64 @@
 // PDF-Ansicht mit PDF.js: rendert die Seiten selbst auf Canvas, statt das PDF dem Browser zu
 // überlassen. So öffnen sich Bögen überall gleich – auch im In-App-Tab einer PWA auf Android,
-// der PDFs sonst nur herunterlädt. PDF.js liegt unter vendor/pdfjs/ (kommt im Docker-Build dazu).
+// der PDFs sonst nur herunterlädt. PDF.js liefert der Server unter /vendor/pdfjs/ aus node_modules aus.
+// Benutzt von der Galerie (eigene Route) und vom Wiki (Overlay): showPdf(container, { url }).
 
 const ZOOMS = [1, 1.5, 2, 3];
 // Obergrenze pro Canvas: mobile Browser verweigern größere Flächen oder werden langsam
 const MAX_CANVAS_PIXELS = 16_000_000;
 
+const VENDOR = '/vendor/pdfjs/';
+
 let pdfjsPromise;
-function loadPdfjs(base) {
-  pdfjsPromise ??= import(`${base}vendor/pdfjs/pdf.min.mjs`).then((pdfjs) => {
-    pdfjs.GlobalWorkerOptions.workerSrc = `${base}vendor/pdfjs/pdf.worker.min.mjs`;
+function loadPdfjs() {
+  // Zur Laufzeit vom Server laden, nicht von Vite bündeln lassen
+  const src = `${VENDOR}pdf.min.mjs`;
+  pdfjsPromise ??= import(/* @vite-ignore */ src).then((pdfjs) => {
+    pdfjs.GlobalWorkerOptions.workerSrc = `${VENDOR}pdf.worker.min.mjs`;
     return pdfjs;
   });
   return pdfjsPromise;
 }
 
+/** Kleiner DOM-Baukasten: el('a', { href, onclick }, 'Text', kindElement, …) */
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (value === undefined || value === null || value === false) continue;
+    if (key === 'class') node.className = value;
+    else if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
+    else node.setAttribute(key, value === true ? '' : value);
+  }
+  node.append(...children.filter((c) => c !== null && c !== undefined && c !== false));
+  return node;
+}
+
 /**
- * Zeigt das PDF unter `url` in `container`. `el` baut DOM-Knoten (wie in app.js).
+ * Zeigt das PDF unter `url` in `container`.
  * Gibt eine Aufräumfunktion zurück (bricht Laden und Rendern ab, gibt Speicher frei).
  */
-export function showPdf(container, { base, url, el }) {
+export function showPdf(container, { url }) {
   let destroyed = false;
   let doc = null;
   let loading = null;
   let zoomIndex = 0;
   const pages = [];
 
-  const status = el('p', { class: 'empty' }, 'PDF wird geladen …');
+  const status = el('p', { class: 'pdf-status' }, 'PDF wird geladen …');
   const zoomLabel = el('span', { class: 'zoom-label' }, '100 %');
   const zoomOut = el('button', { type: 'button', 'aria-label': 'Verkleinern', onclick: () => setZoom(zoomIndex - 1) }, '−');
   const zoomIn = el('button', { type: 'button', 'aria-label': 'Vergrößern', onclick: () => setZoom(zoomIndex + 1) }, '+');
   const pageCount = el('span', { class: 'page-count' });
   const toolbar = el('div', { class: 'pdf-toolbar' },
-    el('a', { class: 'doc', href: url, download: '' }, '⬇', 'Herunterladen'),
+    el('a', { class: 'pdf-download', href: url, download: '' }, el('span', { 'aria-hidden': 'true' }, '⬇'), 'Herunterladen'),
     el('span', { class: 'spacer' }),
     pageCount,
     el('span', { class: 'zoom' }, zoomOut, zoomLabel, zoomIn));
   const scroller = el('div', { class: 'pdf-scroller' });
   const sheet = el('div', { class: 'pdf-pages' });
   scroller.append(sheet);
-  container.replaceChildren(toolbar, status);
+  const root = el('div', { class: 'pdf-view' }, toolbar, status);
+  container.replaceChildren(root);
 
   // Seiten nur rendern, solange sie in der Nähe des sichtbaren Bereichs sind
   const observer = new IntersectionObserver((entries) => {
@@ -113,16 +132,15 @@ export function showPdf(container, { base, url, el }) {
 
   (async () => {
     try {
-      const pdfjs = await loadPdfjs(base);
+      const pdfjs = await loadPdfjs();
       if (destroyed) return;
-      const vendor = `${base}vendor/pdfjs/`;
       loading = pdfjs.getDocument({
         url,
-        cMapUrl: `${vendor}cmaps/`,
+        cMapUrl: `${VENDOR}cmaps/`,
         cMapPacked: true,
-        standardFontDataUrl: `${vendor}standard_fonts/`,
-        wasmUrl: `${vendor}wasm/`,
-        iccUrl: `${vendor}iccs/`
+        standardFontDataUrl: `${VENDOR}standard_fonts/`,
+        wasmUrl: `${VENDOR}wasm/`,
+        iccUrl: `${VENDOR}iccs/`
       });
       doc = await loading.promise;
       if (destroyed) return;
@@ -146,7 +164,7 @@ export function showPdf(container, { base, url, el }) {
       for (const page of pages) observer.observe(page.wrap);
     } catch (error) {
       if (destroyed) return;
-      status.className = 'error';
+      status.className = 'pdf-status error';
       status.replaceChildren(`PDF konnte nicht angezeigt werden (${error?.message || error}). `,
         el('a', { href: url, download: '' }, 'Herunterladen'));
     }
@@ -159,5 +177,6 @@ export function showPdf(container, { base, url, el }) {
     observer.disconnect();
     for (const page of pages) releasePage(page);
     loading?.destroy();
+    root.remove();
   };
 }

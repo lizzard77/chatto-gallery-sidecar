@@ -1,8 +1,19 @@
 {
   "name": "chatto-gallery-sidecar",
   "private": true,
-  "description": "Nur für PDF.js (wird im Docker-Build nach web/vendor/pdfjs kopiert)",
+  "type": "module",
+  "description": "Spielrunden: Karte + Abenteuer-Wiki + Galerie neben Chatto",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "start": "node server/server.js"
+  },
   "dependencies": {
     "pdfjs-dist": "6.4.299"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "svelte": "5.57.2",
+    "vite": "8.3.5"
   }
 }

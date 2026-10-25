@@ -1,19 +1,25 @@
-# Galerie für Charakterbögen: nginx liefert Seite, Ordnerlisten (JSON) und Vorschaubilder
+# Spielrunden: Node-Server (server/) liefert die Svelte-SPA (dist/), Galerie, Abenteuer-Seiten und Login über Chatto
 
-# PDF.js (Version in package.json) für die PDF-Ansicht
-FROM node:22-alpine AS pdfjs
+# SPA bauen (Vite)
+FROM node:22-alpine AS build
 WORKDIR /src
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --ignore-scripts \
- && mkdir -p /out \
- && cd node_modules/pdfjs-dist \
- && cp build/pdf.min.mjs build/pdf.worker.min.mjs LICENSE /out/ \
- && cp -r cmaps standard_fonts wasm iccs /out/
+RUN npm ci
+COPY index.html vite.config.js ./
+COPY src/ src/
+COPY public/ public/
+RUN npm run build
 
-FROM nginx:alpine
-COPY nginx/nginx.conf /etc/nginx/nginx.conf
-COPY web/ /usr/share/nginx/html/
-COPY --from=pdfjs /out/ /usr/share/nginx/html/vendor/pdfjs/
-# Dateien:       /srv/gallery (read-only mounten)
-# Passwortdatei: /etc/nginx/auth/htpasswd (Pflicht, sonst startet nginx nicht)
+FROM node:22-alpine
+WORKDIR /app
+ENV NODE_ENV=production DATA=/data PORT=8080
+# Zur Laufzeit nur pdfjs-dist (wird unter /vendor/pdfjs/ ausgeliefert)
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --omit=optional --ignore-scripts && npm cache clean --force \
+ && mkdir -p /data && chown node:node /data
+COPY server/ server/
+COPY --from=build /src/dist/ dist/
+# Daten: /data (files/, wiki/, .secret) – beschreibbar für uid 1000
+USER node
 EXPOSE 8080
+CMD ["node", "server/server.js"]
