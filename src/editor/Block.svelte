@@ -3,19 +3,21 @@
   // hier nur Darstellung, Griff-Menü und Bild/Datei.
   import { untrack } from 'svelte';
   import SlashMenu from './SlashMenu.svelte';
+  import { fileUrl } from '../api.js';
+  import { renderInline } from './caret.js';
 
-  let { block, nr, slash = null, menuOpen = false, ontogglemenu, onmove, ondelete, onimage, onpdf } = $props();
+  let { block, spiel, nr, href, slash = null, menuOpen = false, ontogglemenu, onmove, ondelete, onimage, onpdf } = $props();
 
   const TAGS = { p: 'p', h2: 'h2', h3: 'h3', entry: 'div', quote: 'blockquote', li: 'div' };
   const PLACEHOLDER = {
     p: 'Schreibe … oder / für Befehle', h2: 'Überschrift', h3: 'Zwischenüberschrift',
     entry: 'Datum, Ort …', quote: 'Zitat', li: 'Listenpunkt'
   };
-  const url = $derived(`/wiki/${nr}/${encodeURIComponent(block.file ?? '')}`);
+  const url = $derived(fileUrl(spiel, `.wiki/${nr}/${block.file ?? ''}`));
   const isPdf = $derived(/\.pdf$/i.test(block.file ?? ''));
 
-  // Text nur beim Erzeugen des Elements setzen – danach gehört er dem Browser (sonst springt der Cursor)
-  const setText = (el) => { el.textContent = untrack(() => block.text) ?? ''; };
+  // Text nur beim Erzeugen des Elements setzen – danach baut der BlockEditor ihn bei Eingaben neu auf (sonst springt der Cursor)
+  const setText = (el) => { renderInline(el, untrack(() => block.text) ?? '', href); };
 </script>
 
 <div class="block {block.type}" data-id={block.id}>
@@ -118,6 +120,13 @@
   }
   /* Der Absatz-Hinweis nur im gerade bearbeiteten Block */
   .p .txt:not(:focus):empty::before { content: none; }
+
+  /* Inline-Formatierung: Markierungszeichen nur im bearbeiteten Block sichtbar (gedämpft, klein) */
+  .txt :global(.md) { font-size: 0.8em; opacity: 0.45; font-style: normal; font-weight: normal; }
+  .txt:not(:focus) :global(.md) { display: none; }
+  .txt :global(strong) { font-weight: bold; }
+  .txt :global(.md-link) { color: var(--siegel); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  .txt:not(:focus) :global(.md-link) { cursor: pointer; }
 
   .p .txt { font-size: 19px; line-height: 1.55; }
   .h2 .txt { margin-top: 0.8em; font: 32px/1.2 var(--fell-sc); color: var(--tinte); text-align: center; }

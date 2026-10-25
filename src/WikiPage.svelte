@@ -1,15 +1,18 @@
 <script>
-  // Abenteuer-Seite zu Pin <nr>: immer bearbeitbar, speichert 1 s nach der letzten Änderung.
+  // Abenteuer-Seite <nr> eines Spiels: immer bearbeitbar, speichert 1 s nach der letzten Änderung.
   // Gleichzeitiges Bearbeiten: der Server lehnt mit 409 ab, wenn `updated` nicht mehr stimmt – dann kein Merge,
   // sondern Hinweis + „Neu laden".
   import { onDestroy, untrack } from 'svelte';
   import Pin from './Pin.svelte';
   import BlockEditor from './editor/BlockEditor.svelte';
-  import { api, getJson } from './api.js';
+  import { api, getJson, enc, spielApi } from './api.js';
   import { withIds, stripIds } from './editor/blocks.js';
   import { readText, setCaret } from './editor/caret.js';
 
-  let { nr, me } = $props();
+  let { spiel, nr, me } = $props();
+
+  const pageApi = $derived(`${spielApi(spiel)}/pages/${nr}`);
+  const mapHref = $derived(`#/${enc(spiel)}/`);
 
   let page = $state(null);
   let error = $state(null); // 404 bzw. Fehlermeldung beim Laden
@@ -26,7 +29,7 @@
     conflict = null;
     status = '';
     try {
-      const p = await getJson(`/api/pages/${nr}`);
+      const p = await getJson(pageApi);
       p.blocks = withIds(p.blocks);
       page = p;
     } catch (e) {
@@ -56,7 +59,7 @@
     status = 'Speichert …';
     const body = JSON.stringify({ title: page.title, blocks: stripIds(page.blocks), updated: page.updated });
     try {
-      saving = api(`/api/pages/${nr}`, {
+      saving = api(pageApi, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body,
         keepalive: leaving === true && body.length < 60000
       });
@@ -85,8 +88,8 @@
     deleted = true;
     clearTimeout(timer);
     try {
-      await api(`/api/pages/${nr}`, { method: 'DELETE' });
-      location.hash = '#/';
+      await api(pageApi, { method: 'DELETE' });
+      location.hash = mapHref;
     } catch (e) {
       deleted = false;
       alert(`Löschen fehlgeschlagen: ${e.message}`);
@@ -110,7 +113,7 @@
   {#if error === 404}
     <article class="sheet">
       <p class="missing">Kein Abenteuer mit Nummer {nr}.</p>
-      <p><a href="#/">↩ Zur Karte</a></p>
+      <p><a href={mapHref}>↩ Zur Karte</a></p>
     </article>
   {:else if error}
     <p class="error">Seite konnte nicht geladen werden: {error}</p>
@@ -125,7 +128,7 @@
     {/if}
     <article class="sheet">
       <header>
-        <a class="back" href="#/">↩ Zur Karte</a>
+        <a class="back" href={mapHref}>↩ Zur Karte</a>
         <span class="status" role="status">{status}</span>
         <div class="title-row">
           <Pin {nr} size={58} />
@@ -138,7 +141,7 @@
         {/if}
       </header>
 
-      <BlockEditor bind:blocks={page.blocks} {nr} onchange={changed} />
+      <BlockEditor bind:blocks={page.blocks} {spiel} {nr} onchange={changed} />
 
       <footer>
         <button type="button" class="delete" onclick={remove}>Abenteuer löschen</button>

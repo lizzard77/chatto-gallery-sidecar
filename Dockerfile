@@ -19,7 +19,7 @@ RUN npm ci --omit=dev --omit=optional --ignore-scripts && npm cache clean --forc
  && mkdir -p /data && chown node:node /data
 COPY server/ server/
 COPY --from=build /src/dist/ dist/
-# Daten: /data (files/, wiki/, .secret) – beschreibbar für uid 1000
+# Daten: /data (files/ mit Spielen, .secret) – beschreibbar für uid 1000
 USER node
 EXPOSE 8080
 CMD ["node", "server/server.js"]

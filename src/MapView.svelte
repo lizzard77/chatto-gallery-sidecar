@@ -1,35 +1,46 @@
 <script>
-  // Startseite: Stadtplan London 1888 mit einem Siegel-Pin pro Abenteuer.
-  // Koordinaten in Pixeln der Originalkarte (4800 × 3584), Pins in % positioniert.
+  // Karte eines Spiels mit einem Siegel-Pin pro Abenteuer.
+  // Koordinaten als Anteile 0…1 der Kartenbreite/-höhe; Abenteuer ohne Ort (x = null) stehen nur im Verzeichnis.
   import { tick } from 'svelte';
   import Pin from './Pin.svelte';
-  import { getJson, sendJson } from './api.js';
+  import { api, getJson, sendJson, upload, enc, fileUrl, spielApi } from './api.js';
+  import { makeThumb } from './thumb.js';
 
-  const W = 4800, H = 3584;
+  let { spiel } = $props();
+
   const stufen = [1, 1.75, 3, 5]; // Vielfache der eingepassten Größe
   const RAND = 40; // Platz über der Karte für Siegel am oberen Rand
+  const BILD = /\.(jpe?g|png|webp)$/i;
 
+  let info = $state(null); // { karte, overlay, vorschau, … } aus /api/spiele/<Spiel>
   let pages = $state([]);
   let fehler = $state('');
+  let laedt = $state(''); // Hinweis während des Hochladens
   let stufe = $state(0);
   let modus = $state(''); // '' | 'setzen' | 'schieben' | 'bewegen'
+  let menue = $state(false); // Menü „Karte …" offen
   let rw = $state(0), rh = $state(0); // Größe des Rahmens
+  let W = $state(0), H = $state(0); // natürliche Größe des Kartenbilds (0 bis es geladen ist)
   // Stufe 1: ganze Karte passt in den Rahmen (contain); darüber wird verschoben
-  const breite = $derived(Math.max(0, Math.min(rw, ((rh - RAND) * W) / H)) * stufen[stufe]);
+  const breite = $derived(W && H ? Math.max(0, Math.min(rw, ((rh - RAND) * W) / H)) * stufen[stufe] : 0);
   const zuGross = $derived(breite > rw + 1 || (breite * H) / W + RAND > rh + 1);
-  let pan = null; // { x, y, sl, st } beim Verschieben der Ansicht
-  let neu = $state(null); // { x, y } während der Titel-Dialog offen ist
+  const mitOrt = $derived(pages.filter((p) => p.x != null));
+  let pan = $state.raw(null); // { x, y, sl, st } beim Verschieben der Ansicht
+  let neu = $state(null); // { x, y } während der Titel-Dialog offen ist (beide null = ohne Ort)
   let titel = $state('');
-  let rahmen, karte, dialog;
+  let rahmen = $state(), karte = $state(), dialog, kartenWahl, overlayWahl, menueKnopf;
   let zieht = null; // { p, start, bewegt } beim Verschieben
+
+  const base = $derived(spielApi(spiel));
+  const wikiHref = (nr) => `#/${enc(spiel)}/wiki/${nr}`;
 
   async function laden() {
     if (zieht) return;
     try {
-      pages = await getJson('/api/pages');
+      [info, pages] = await Promise.all([getJson(base), getJson(`${base}/pages`)]);
       fehler = '';
     } catch (e) {
-      fehler = `Abenteuer konnten nicht geladen werden (${e.message})`;
+      fehler = e.status === 404 ? 'Dieses Spiel gibt es nicht.' : `Karte konnte nicht geladen werden (${e.message})`;
     }
   }
   laden();
@@ -61,32 +72,35 @@
   const panEnd = () => (pan = null);
   $effect(() => { if (!zuGross && modus === 'bewegen') modus = ''; });
 
-  // Bildschirmposition → Originalpixel (begrenzt auf die Karte)
+  // Bildschirmposition → Anteil der Karte (begrenzt auf 0…1, 4 Stellen)
   function aufKarte(e) {
     const r = karte.getBoundingClientRect();
-    const clamp = (v, max) => Math.max(0, Math.min(max, Math.round(v)));
-    return { x: clamp(((e.clientX - r.left) / r.width) * W, W), y: clamp(((e.clientY - r.top) / r.height) * H, H) };
+    const anteil = (v) => Math.round(Math.max(0, Math.min(1, v)) * 1e4) / 1e4;
+    return { x: anteil((e.clientX - r.left) / r.width), y: anteil((e.clientY - r.top) / r.height) };
   }
 
   const umschalten = (m) => (modus = modus === m ? '' : m);
 
-  function kartenKlick(e) {
-    if (modus !== 'setzen') return;
-    neu = aufKarte(e);
+  function titelFragen(pos) {
+    neu = pos;
     titel = '';
     modus = '';
     dialog.showModal();
+  }
+
+  function kartenKlick(e) {
+    if (modus === 'setzen') titelFragen(aufKarte(e));
   }
 
   async function anlegen(e) {
     e.preventDefault();
     if (!titel.trim() || !neu) return;
     try {
-      const p = await sendJson('/api/pages', 'POST', { title: titel.trim(), ...neu });
+      const p = await sendJson(`${base}/pages`, 'POST', { title: titel.trim(), ...neu });
       dialog.close();
-      location.hash = `#/wiki/${p.nr}`;
+      location.hash = wikiHref(p.nr);
     } catch (err) {
-      fehler = `Pin konnte nicht gesetzt werden (${err.message})`;
+      fehler = `Abenteuer konnte nicht angelegt werden (${err.message})`;
       dialog.close();
     }
   }
@@ -110,49 +124,129 @@
     zieht = null;
     if (!bewegt) return;
     try {
-      await sendJson(`/api/pages/${p.nr}/pos`, 'PUT', { x: p.x, y: p.y });
+      await sendJson(`${base}/pages/${p.nr}/pos`, 'PUT', { x: p.x, y: p.y });
     } catch (err) {
       Object.assign(p, start);
       fehler = `Pin ${p.nr} konnte nicht verschoben werden (${err.message})`;
     }
   }
 
+  // ---------- Kartenbild / Beschriftung hochladen ----------
+  async function hochladen(arbeit, text) {
+    menue = false;
+    laedt = text;
+    try {
+      await arbeit();
+      await laden();
+    } catch (err) {
+      fehler = `${text.replace(/ …$/, '')} fehlgeschlagen (${err.message})`;
+    }
+    laedt = '';
+  }
+
+  function karteGewaehlt(e) {
+    const file = e.currentTarget.files[0];
+    e.currentTarget.value = '';
+    if (!file) return;
+    const ext = file.name.match(BILD)?.[1].toLowerCase();
+    if (!ext) return (fehler = 'Kartenbild muss JPG, PNG oder WebP sein.');
+    hochladen(async () => {
+      await upload(fileUrl(spiel, `.karte/karte.${ext}`), file);
+      // Vorschau für die Übersicht – ohne geht's auch
+      const thumb = await makeThumb(file);
+      if (thumb) await upload(fileUrl(spiel, '.karte/vorschau.webp'), thumb).catch(() => {});
+    }, 'Kartenbild hochladen …');
+  }
+
+  function overlayGewaehlt(e) {
+    const file = e.currentTarget.files[0];
+    e.currentTarget.value = '';
+    if (!file) return;
+    if (!/\.svg$/i.test(file.name)) return (fehler = 'Beschriftung muss eine SVG-Datei sein.');
+    hochladen(() => upload(fileUrl(spiel, '.karte/overlay.svg'), file), 'Beschriftung hochladen …');
+  }
+
+  function overlayEntfernen() {
+    menue = false;
+    if (!confirm('Beschriftung der Karte entfernen?')) return;
+    hochladen(() => api(fileUrl(spiel, '.karte/overlay.svg'), { method: 'DELETE' }), 'Beschriftung entfernen …');
+  }
+
+  function karteWaehlen() {
+    menue = false;
+    kartenWahl.click();
+  }
+
+  // Menü schließt bei Klick daneben
+  function draussen(e) {
+    if (menue && !e.target.closest?.('.menuehalter')) menue = false;
+  }
+
   function taste(e) {
-    if (e.key === 'Escape' && modus && !dialog.open) modus = '';
+    if (e.key !== 'Escape' || dialog.open) return;
+    if (menue) { menue = false; menueKnopf.focus(); } else if (modus) modus = '';
   }
 </script>
 
-<svelte:window onkeydown={taste} />
+<svelte:window onkeydown={taste} onpointerdown={draussen} />
 <svelte:document onvisibilitychange={() => document.visibilityState === 'visible' && laden()} />
+
+<input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" hidden bind:this={kartenWahl} onchange={karteGewaehlt} />
+<input type="file" accept=".svg,image/svg+xml" hidden bind:this={overlayWahl} onchange={overlayGewaehlt} />
 
 <div class="kartenseite">
   <div class="oben">
   <div class="werkzeuge">
     <div class="kartusche">
-      <span class="klein">Plan der Stadt</span>
-      <h1>London</h1>
-      <span class="klein">Anno Domini 1888</span>
+      <span class="klein">Karte</span>
+      <h1 title={spiel}>{spiel}</h1>
     </div>
     <div class="knoepfe">
       <span class="gruppe">
-        <button class="messing" onclick={() => zoom(-1)} disabled={stufe === 0} aria-label="Verkleinern">−</button>
+        <button class="messing" onclick={() => zoom(-1)} disabled={!info?.karte || stufe === 0} aria-label="Verkleinern">−</button>
         <span class="stufe">{Math.round(stufen[stufe] * 100)} %</span>
-        <button class="messing" onclick={() => zoom(1)} disabled={stufe === stufen.length - 1} aria-label="Vergrößern">+</button>
+        <button class="messing" onclick={() => zoom(1)} disabled={!info?.karte || stufe === stufen.length - 1} aria-label="Vergrößern">+</button>
       </span>
-      <button class="messing" class:an={modus === 'setzen'} aria-pressed={modus === 'setzen'} onclick={() => umschalten('setzen')}>
+      <button class="messing" class:an={modus === 'setzen'} aria-pressed={modus === 'setzen'} disabled={!info?.karte}
+        onclick={() => umschalten('setzen')}>
         Pin setzen
       </button>
-      <button class="messing" class:an={modus === 'schieben'} aria-pressed={modus === 'schieben'} onclick={() => umschalten('schieben')}>
-        Pins verschieben
+      <button class="messing" class:an={modus === 'schieben'} aria-pressed={modus === 'schieben'} disabled={!mitOrt.length}
+        onclick={() => umschalten('schieben')}>
+        <span class="lang">Pins</span> verschieben
       </button>
       <button class="messing hand" class:an={modus === 'bewegen'} aria-pressed={modus === 'bewegen'} disabled={!zuGross}
         title="Karte bewegen (oder mit der rechten Maustaste ziehen)" aria-label="Karte bewegen" onclick={() => umschalten('bewegen')}>
         ✋
       </button>
+      <span class="menuehalter">
+        <button class="messing" class:an={menue} aria-expanded={menue} aria-haspopup="menu" disabled={!info || !!laedt}
+          bind:this={menueKnopf} onclick={() => (menue = !menue)}>
+          Karte …
+        </button>
+        {#if menue}
+          <span class="menue" role="menu">
+            <button role="menuitem" onclick={karteWaehlen}>{info?.karte ? 'Kartenbild ersetzen' : 'Kartenbild hochladen'}</button>
+            <button role="menuitem" onclick={() => { menue = false; overlayWahl.click(); }} disabled={!info?.karte}>
+              Beschriftung (SVG) hochladen
+            </button>
+            {#if info?.overlay}
+              <button role="menuitem" onclick={overlayEntfernen}>Beschriftung entfernen</button>
+            {/if}
+          </span>
+        {/if}
+      </span>
     </div>
   </div>
 
   <div class="kartenfeld">
+    {#if info && !info.karte}
+      <button class="ohnekarte" onclick={() => kartenWahl.click()} disabled={!!laedt}>
+        <span class="ornament" aria-hidden="true">❦</span>
+        <span>Noch keine Karte – <u>Kartenbild hochladen</u></span>
+        <small>JPG, PNG oder WebP</small>
+      </button>
+    {:else if info}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="rahmen" class:bewegen={modus === 'bewegen'} class:zieht={pan} bind:this={rahmen}
       bind:clientWidth={rw} bind:clientHeight={rh}
@@ -160,14 +254,14 @@
       oncontextmenu={(e) => zuGross && e.preventDefault()}>
     <div class="flaeche">
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-    <div class="karte" class:setzen={modus === 'setzen'} class:schieben={modus === 'schieben'}
+    <div class="karte" class:setzen={modus === 'setzen'} class:schieben={modus === 'schieben'} class:bereit={breite}
       style="width: {breite}px" bind:this={karte} onclick={kartenKlick}>
-      <img src="/map/london-1888-basis.jpg" alt="Stadtplan von London, 1888" width={W} height={H} draggable="false" />
-      <img class="labels" src="/map/london-1888-labels.svg" alt="" width={W} height={H} draggable="false" />
+      <img src={info.karte} alt="Karte: {spiel}" draggable="false" bind:naturalWidth={W} bind:naturalHeight={H} />
+      {#if info.overlay}<img class="labels" src={info.overlay} alt="" draggable="false" />{/if}
 
-      {#each pages as p (p.nr)}
-        <a class="pin" class:links={p.x > W * 0.78} href="#/wiki/{p.nr}"
-          style="left: {p.x / 48}%; top: {p.y / 35.84}%" aria-label="Abenteuer {p.nr}: {p.title}"
+      {#each mitOrt as p (p.nr)}
+        <a class="pin" class:links={p.x > 0.78} href={wikiHref(p.nr)}
+          style="left: {p.x * 100}%; top: {p.y * 100}%" aria-label="Abenteuer {p.nr}: {p.title}"
           draggable="false"
           onclick={(e) => modus && e.preventDefault()}
           onpointerdown={(e) => greifen(e, p)} onpointermove={ziehen} onpointerup={loslassen} onpointercancel={loslassen}>
@@ -176,13 +270,16 @@
           <span class="schild">{p.title}</span>
         </a>
       {/each}
-      {#if neu}
-        <span class="pin geist" style="left: {neu.x / 48}%; top: {neu.y / 35.84}%"><span class="nadel"></span><Pin nr="?" /></span>
+      {#if neu && neu.x != null}
+        <span class="pin geist" style="left: {neu.x * 100}%; top: {neu.y * 100}%"><span class="nadel"></span><Pin nr="?" /></span>
       {/if}
     </div>
     </div>
     </div>
-    {#if modus === 'setzen'}
+    {/if}
+    {#if laedt}
+      <p class="hinweis">{laedt}</p>
+    {:else if modus === 'setzen'}
       <p class="hinweis">Klicke auf die Karte, wo das Abenteuer spielt. <small>(Esc bricht ab)</small></p>
     {:else if modus === 'schieben'}
       <p class="hinweis">Ziehe die Siegel an ihren neuen Ort. <small>(Esc beendet)</small></p>
@@ -193,14 +290,24 @@
   </div>
   </div>
 
-  {#if pages.length}
+  {#if info}
     <section class="verzeichnis">
       <h2>Verzeichnis der Abenteuer</h2>
-      <ol>
-        {#each pages as p (p.nr)}
-          <li><a href="#/wiki/{p.nr}"><Pin nr={p.nr} size={26} /><span>{p.title}</span></a></li>
-        {/each}
-      </ol>
+      {#if pages.length}
+        <ol>
+          {#each pages as p (p.nr)}
+            <li>
+              <a href={wikiHref(p.nr)}>
+                <Pin nr={p.nr} size={26} /><span>{p.title}</span>
+                {#if p.x == null}<small class="ohneort">ohne Ort</small>{/if}
+              </a>
+            </li>
+          {/each}
+        </ol>
+      {/if}
+      <p class="neuohneort">
+        <button class="messing" onclick={() => titelFragen({ x: null, y: null })}>+ Abenteuer ohne Ort</button>
+      </p>
     </section>
   {/if}
 </div>
@@ -212,7 +319,7 @@
     <input id="pin-titel" bind:value={titel} autofocus required maxlength="200" autocomplete="off" />
     <div class="knoepfe">
       <button type="button" class="messing" onclick={() => dialog.close()}>Abbrechen</button>
-      <button class="messing">Pin setzen</button>
+      <button class="messing">{neu?.x == null ? 'Anlegen' : 'Pin setzen'}</button>
     </div>
   </form>
 </dialog>
@@ -254,6 +361,10 @@
     font: 400 30px/1 var(--fell-sc, 'IM Fell English SC', Georgia, serif);
     letter-spacing: 0.18em;
     padding-left: 0.18em;
+    max-width: 14em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .kartusche .klein { font-style: italic; font-size: 13px; }
   .kartusche .klein:first-child::before, .kartusche .klein:first-child::after { content: ' ~ '; color: var(--s); }
@@ -283,6 +394,52 @@
   }
   .messing:disabled { opacity: 0.45; cursor: default; }
   .messing:focus-visible { outline: 2px solid var(--s); outline-offset: 2px; }
+
+  /* Menü „Karte …": Papierzettel unter dem Knopf */
+  .menuehalter { position: relative; }
+  .menue {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 5;
+    display: grid;
+    min-width: max-content;
+    padding: 4px;
+    background: #f6ecd6;
+    border: 3px double var(--t);
+    box-shadow: 0 4px 12px rgba(36, 24, 13, 0.35);
+  }
+  .menue button {
+    padding: 8px 12px;
+    text-align: left;
+    font: italic 17px var(--fell, 'IM Fell English', Georgia, serif);
+    color: var(--t);
+    background: none;
+    border: 0;
+    cursor: pointer;
+  }
+  .menue button:hover:not(:disabled), .menue button:focus-visible { color: var(--s); background: rgba(138, 43, 24, 0.08); outline: none; }
+  .menue button:disabled { opacity: 0.45; cursor: default; }
+
+  /* Ohne Karte: großes Feld zum Hochladen */
+  .ohnekarte {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-content: center;
+    justify-items: center;
+    gap: 6px;
+    font: italic 22px var(--fell, 'IM Fell English', Georgia, serif);
+    color: var(--t);
+    background: #f6e0c3;
+    border: 4px double var(--t);
+    box-shadow: 0 3px 12px rgba(36, 24, 13, 0.3);
+    cursor: pointer;
+  }
+  .ohnekarte:hover:not(:disabled) u { color: var(--s); }
+  .ohnekarte:focus-visible { outline: 2px solid var(--s); outline-offset: 2px; }
+  .ohnekarte .ornament { font-size: 54px; font-style: normal; color: var(--s); opacity: 0.6; }
+  .ohnekarte small { font-size: 15px; opacity: 0.7; }
 
   /* schwebt unten über der Karte, damit die Karte beim Umschalten nicht springt */
   .hinweis {
@@ -324,7 +481,8 @@
   .flaeche { position: relative; display: flex; min-width: 100%; min-height: 100%; width: max-content; padding-top: 40px; }
   .karte { flex: none; margin: auto; position: relative; line-height: 0; user-select: none; -webkit-user-select: none; }
   .karte img { display: block; width: 100%; height: auto; -webkit-user-drag: none; }
-  .karte .labels { position: absolute; inset: 0; pointer-events: none; }
+  .karte .labels { position: absolute; inset: 0; height: 100%; pointer-events: none; }
+  .karte:not(.bereit) { visibility: hidden; } /* bis die Bildgröße bekannt ist */
   .karte.setzen { cursor: crosshair; }
 
   /* Pin: Nadelspitze sitzt exakt auf der Koordinate, Siegel darüber */
@@ -408,6 +566,8 @@
     font-size: 18px;
   }
   .verzeichnis a:hover span, .verzeichnis a:focus-visible span { color: var(--s); text-decoration: underline; }
+  .verzeichnis .ohneort { margin-left: auto; font-style: italic; font-size: 14px; opacity: 0.65; white-space: nowrap; }
+  .neuohneort { margin: 14px 0 0; text-align: center; }
 
   /* ---------- Dialog „Titel des Abenteuers" ---------- */
   .titeldialog {
@@ -441,5 +601,9 @@
     .stufe { min-width: 2.9em; font-size: 14px; }
     .messing { font-size: 13px; letter-spacing: 0; padding: 4px 7px; min-width: 34px; min-height: 34px; }
     .kartusche { display: none; } /* auf dem Handy zählt jeder Pixel Karte */
+  }
+  @media (max-width: 420px) {
+    /* alle Knöpfe in einer Zeile */
+    .lang, .stufe { display: none; }
   }
 </style>

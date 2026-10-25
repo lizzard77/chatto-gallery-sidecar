@@ -51,7 +51,8 @@ a { color: inherit; }
 
 .spacer { flex: 1; }
 
-/* Kopfzeile (App.svelte) */
+/* Kopfzeile (App.svelte): 📜 Spielrunden › <Spiel>  [Karte] [Dateien]  …  Name
+   Markup: <a class="logo">📜 <span>Spielrunden</span></a> <a class="spiel">› …</a> <nav class="tabs"> */
 .bar {
   position: sticky;
   top: 0;
@@ -59,11 +60,25 @@ a { color: inherit; }
   display: flex;
   align-items: center;
   gap: 10px;
+  white-space: nowrap;
   height: var(--bar-height);
   padding: 0 16px;
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--border);
+}
+.bar > * { flex-shrink: 0; }
+.bar .logo { color: var(--gold); text-decoration: none; font: 20px var(--fell-sc); }
+.bar .logo:hover, .bar .spiel:hover { filter: brightness(1.15); }
+/* Spielname gibt als Erstes nach und wird mit … gekürzt */
+.bar .spiel {
+  flex-shrink: 1;
+  min-width: 2em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font: 18px var(--fell);
+  color: var(--text);
+  text-decoration: none;
 }
 .tabs { display: flex; gap: 4px; }
 .tabs a {
@@ -76,8 +91,8 @@ a { color: inherit; }
 }
 .tabs a:hover { color: var(--gold); }
 .tabs a.active { color: var(--gold); border-color: var(--gold); background: var(--gold-soft); }
-.me {
-  min-width: 0;
+.bar .me {
+  max-width: 30vw;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -250,6 +265,13 @@ a { color: inherit; }
 .lightbox .lb-close { position: absolute; top: 4px; right: 4px; font-size: 26px; }
 
 @media (max-width: 520px) {
+  /* Kopfzeile auf dem Handy in einer Zeile: im Spiel nur 📜 statt „Spielrunden“, Reiter schmaler */
+  .bar { gap: 6px; padding: 0 10px; }
+  .bar:has(.spiel) .logo span { display: none; }
+  .bar .spiel { font-size: 16px; }
+  .tabs { gap: 2px; }
+  .tabs a { padding: 5px 9px; font-size: 14px; }
+  .bar .me { max-width: 64px; font-size: 12px; }
   .gallery-head { padding: 12px 12px 0; }
   .gallery { padding: 12px; }
   .gallery .folders { grid-template-columns: repeat(2, 1fr); gap: 8px; }
@@ -257,6 +279,8 @@ a { color: inherit; }
   .lightbox .lb-nav { display: none; }
   .lightbox[open] { grid-template-columns: 1fr; }
 }
+
+@media (max-width: 340px) { .bar .me { display: none; } }
 
 /* PDF-Ansicht (pdfviewer.js, in der Galerie und im Wiki-Overlay) */
 .pdf-toolbar {

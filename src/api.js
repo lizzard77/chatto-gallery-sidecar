@@ -1,5 +1,5 @@
 // Fetch-Helfer für den Node-Server. Ohne Sitzung (401) geht's über Chatto zum Login;
-// der Hash (#/wiki/3 …) überlebt den Umweg in sessionStorage.
+// der Hash (#/London%201888/wiki/3 …) überlebt den Umweg in sessionStorage.
 
 export async function api(path, options = {}) {
   const res = await fetch(path, { cache: 'no-cache', ...options });
@@ -38,3 +38,9 @@ if (back !== null) {
   sessionStorage.removeItem('return');
   if (!location.hash) history.replaceState(null, '', back || '#/');
 }
+
+/** Pfadsegmente URL-kodieren und mit / verbinden: enc('London 1888', 'wiki', 3) */
+export const enc = (...segs) => segs.map((s) => encodeURIComponent(s)).join('/');
+/** Datei im Spiel-Ordner: fileUrl('London 1888', 'Mira/Bogen.pdf') */
+export const fileUrl = (spiel, pfad = '') => `/files/${enc(spiel, ...pfad.split('/').filter(Boolean))}${pfad.endsWith('/') ? '/' : ''}`;
+export const spielApi = (spiel) => `/api/spiele/${enc(spiel)}`;

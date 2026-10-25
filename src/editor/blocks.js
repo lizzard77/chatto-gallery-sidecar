@@ -92,7 +92,8 @@ export const COMMANDS = [
   { type: 'li', label: 'Liste', icon: '•', alias: ['li', 'punkt', 'aufzahlung', '-'] },
   { type: 'hr', label: 'Trenner', icon: '❦', alias: ['hr', 'linie', '---'] },
   { type: 'image', label: 'Bild', icon: '🖼', alias: ['foto', 'img'] },
-  { type: 'file', label: 'Datei', icon: '📎', alias: ['pdf', 'anhang'] }
+  { type: 'file', label: 'Datei', icon: '📎', alias: ['pdf', 'anhang'] },
+  { type: 'link', label: 'Link zu Datei', icon: '🔗', alias: ['link', 'verweis', 'url'] }
 ];
 
 const plain = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();

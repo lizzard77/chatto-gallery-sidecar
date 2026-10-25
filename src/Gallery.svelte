@@ -1,33 +1,33 @@
 <script>
-  // Galerie: liest Ordnerlisten als JSON unter /files/ und zeigt Unterordner als Karten,
-  // PDFs/Dokumente als Buttons und Bilder als Raster. Ein PDF öffnet sich als
-  // #/galerie/Ordner/Datei.pdf (ohne Schrägstrich am Ende) im PDF-Viewer.
+  // Dateien eines Spiels: liest Ordnerlisten als JSON unter /files/<Spiel>/ und zeigt Unterordner
+  // als Karten, PDFs/Dokumente als Buttons und Bilder als Raster. Ein PDF öffnet sich als
+  // #/<Spiel>/dateien/Ordner/Datei.pdf (ohne Schrägstrich am Ende) im PDF-Viewer.
   // Hochladen per Knopf oder Drag & Drop; für Bilder baut der Browser gleich ein Vorschaubild.
-  import { getJson, upload } from './api.js';
+  import { getJson, upload, enc } from './api.js';
+  import { makeThumb } from './thumb.js';
   import { showPdf } from './pdfviewer.js';
   import Lightbox from './Lightbox.svelte';
 
-  /** Roher Hash-Rest hinter #/galerie/, URL-kodiert, z. B. "London%201888/Mira/" */
-  let { path } = $props();
+  /** spiel = Ordner unter files/; path = roher Hash-Rest hinter dateien/, URL-kodiert, z. B. "Mira/" */
+  let { spiel, path } = $props();
 
   const IMAGE = /\.(jpe?g|png|webp|gif|avif|svg|heic)$/i;
   // Für diese Formate gibt es Vorschaubilder (.thumbs/*.webp); alles andere wird direkt geladen
   const THUMBABLE = /\.(jpe?g|png|webp|gif)$/i;
   const PDF = /\.pdf$/i;
-  const THUMB_SIZE = 640;
 
   const collator = new Intl.Collator('de', { numeric: true, sensitivity: 'base' });
   const byName = (a, b) => collator.compare(a.name, b.name);
   const stripExt = (name) => name.replace(/\.[^.]+$/, '');
   const decode = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
 
-  const encodePath = (segments) => segments.map(encodeURIComponent).join('/');
-  const folderHref = (segments) => `#/galerie/${encodePath(segments)}${segments.length ? '/' : ''}`;
-  const fileHref = (segments) => `#/galerie/${encodePath(segments)}`;
-  const fileUrl = (segments) => `/files/${encodePath(segments)}`;
+  // segments = Pfad relativ zum Spiel-Ordner
+  const fileHref = (segments) => `#/${enc(spiel)}/dateien/${enc(...segments)}`;
+  const folderHref = (segments) => fileHref(segments) + (segments.length ? '/' : '');
+  const rawUrl = (segments) => `/files/${enc(spiel, ...segments)}`;
   const thumbUrl = (segments, entry) => THUMBABLE.test(entry.name)
-    ? `/thumb/${encodePath(segments)}?v=${encodeURIComponent(entry.mtime || '')}`
-    : fileUrl(segments);
+    ? `/thumb/${enc(spiel, ...segments)}?v=${encodeURIComponent(entry.mtime || '')}`
+    : rawUrl(segments);
 
   function formatSize(bytes) {
     if (!bytes) return '';
@@ -38,9 +38,9 @@
   // Ordnerlisten zwischenspeichern (auch für die Titelbilder der Ordnerkarten)
   const listings = new Map();
   function list(segments) {
-    const key = segments.join('/');
+    const key = enc(spiel, ...segments);
     if (!listings.has(key)) {
-      const promise = getJson(`/files/${encodePath(segments)}${segments.length ? '/' : ''}`)
+      const promise = getJson(`/files/${key}/`)
         .catch((error) => { throw error.status === 404 ? new Error('Ordner nicht gefunden') : error; })
         .then((entries) => entries.filter((e) => !e.name.startsWith('.')));
       listings.set(key, promise);
@@ -51,7 +51,7 @@
 
   const segments = $derived(path.split('/').filter(Boolean).map(decode));
   const isPdf = $derived(!path.endsWith('/') && PDF.test(segments.at(-1) ?? ''));
-  const canUpload = $derived(segments.length > 0 && !isPdf);
+  const canUpload = $derived(!isPdf);
 
   let error = $state('');
   let loaded = $state(false);
@@ -64,23 +64,24 @@
   let pdfBox = $state();
 
   async function load(segs, scroll) {
-    const key = segs.join('/');
+    const key = enc(spiel, ...segs);
+    const current = () => key === enc(spiel, ...segments);
     let entries;
     try {
       entries = await list(segs);
     } catch (e) {
-      if (key === segments.join('/')) { error = `Fehler: ${e.message}`; loaded = true; }
+      if (current()) { error = `Fehler: ${e.message}`; loaded = true; }
       return;
     }
-    if (key !== segments.join('/')) return; // inzwischen weiternavigiert
+    if (!current()) return; // inzwischen weiternavigiert
     const files = entries.filter((e) => e.type === 'file').sort(byName);
     error = '';
     // PDFs zuerst, dann andere Dateien
     docs = files.filter((e) => !IMAGE.test(e.name))
       .sort((a, b) => Number(PDF.test(b.name)) - Number(PDF.test(a.name)) || byName(a, b))
-      .map((e) => ({ ...e, pdf: PDF.test(e.name), url: fileUrl([...segs, e.name]), href: fileHref([...segs, e.name]) }));
+      .map((e) => ({ ...e, pdf: PDF.test(e.name), url: rawUrl([...segs, e.name]), href: fileHref([...segs, e.name]) }));
     images = files.filter((e) => IMAGE.test(e.name))
-      .map((e) => ({ name: e.name, url: fileUrl([...segs, e.name]), thumb: thumbUrl([...segs, e.name], e) }));
+      .map((e) => ({ name: e.name, url: rawUrl([...segs, e.name]), thumb: thumbUrl([...segs, e.name], e) }));
     folders = entries.filter((e) => e.type === 'directory').sort(byName)
       .map((e) => ({ name: e.name, href: folderHref([...segs, e.name]), cover: null, meta: '' }));
     // Titelbild und Zähler der Ordnerkarten kommen nachträglich
@@ -108,18 +109,16 @@
     };
   }
 
-  // Neuer Pfad: Lightbox zu, Titel setzen, Ordner laden
+  // Neuer Pfad: Lightbox zu, Ordner laden (den Seitentitel setzt App.svelte)
   $effect(() => {
     const segs = segments;
     lightbox = null;
-    const title = segs.length ? segs.at(-1).replace(PDF, '') : 'Galerie';
-    document.title = `${title} – Spielrunden`;
     if (isPdf) window.scrollTo(0, 0);
     else load(segs, true);
   });
 
   $effect(() => {
-    if (isPdf && pdfBox) return showPdf(pdfBox, { url: fileUrl(segments) });
+    if (isPdf && pdfBox) return showPdf(pdfBox, { url: rawUrl(segments) });
   });
 
   // Beim Zurückkehren in den Tab (z. B. aus Chatto) neu laden, damit frisch hochgeladene
@@ -139,11 +138,9 @@
       for (const [i, file] of files.entries()) {
         status = `Lade ${i + 1}/${files.length} hoch …`;
         const name = await uploadUnique(segs, file);
-        if (THUMBABLE.test(name)) {
-          await makeThumb(file)
-            .then((blob) => upload(fileUrl([...segs, '.thumbs', `${name}.webp`]), blob))
-            .catch(() => {}); // ohne Vorschaubild geht's auch
-        }
+        const blob = THUMBABLE.test(name) && await makeThumb(file);
+        // ohne Vorschaubild geht's auch
+        if (blob) await upload(rawUrl([...segs, '.thumbs', `${name}.webp`]), blob).catch(() => {});
       }
       status = '';
     } catch (e) {
@@ -159,27 +156,12 @@
     for (let n = 1; ; n++) {
       const name = n === 1 ? file.name : `${stem} (${n})${ext}`;
       try {
-        await upload(fileUrl([...segs, name]), file);
+        await upload(rawUrl([...segs, name]), file);
         return name;
       } catch (e) {
         if (e.status !== 409) throw e;
       }
     }
-  }
-
-  /** Vorschaubild: längste Seite 640 px, WebP */
-  async function makeThumb(file) {
-    const bitmap = await createImageBitmap(file);
-    const scale = Math.min(1, THUMB_SIZE / Math.max(bitmap.width, bitmap.height));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    bitmap.close();
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/webp', 0.82));
-    // Safari kann kein WebP erzeugen und liefert dann PNG – lieber kein Vorschaubild
-    if (blob?.type !== 'image/webp') throw new Error('Kein WebP');
-    return blob;
   }
 
   const hasFiles = (ev) => canUpload && ev.dataTransfer?.types.includes('Files');
@@ -202,7 +184,7 @@
 <div class="gallery-head">
   <nav class="crumbs" aria-label="Pfad">
     {#if segments.length}
-      <a href="#/galerie/">Galerie</a>
+      <a href={folderHref([])}>Dateien</a>
       {#each segments as name, i}
         <span class="sep">›</span>
         {#if i === segments.length - 1}
@@ -212,7 +194,7 @@
         {/if}
       {/each}
     {:else}
-      <span class="current">Galerie</span>
+      <span class="current">Dateien</span>
     {/if}
   </nav>
   {#if canUpload}

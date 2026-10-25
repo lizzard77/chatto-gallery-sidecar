@@ -5,5 +5,5 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 const api = 'http://localhost:8090';
 export default defineConfig({
   plugins: [svelte()],
-  server: { proxy: Object.fromEntries(['/api', '/files', '/thumb', '/wiki', '/oauth', '/vendor'].map((p) => [p, api])) }
+  server: { proxy: Object.fromEntries(['/api', '/files', '/thumb', '/oauth', '/vendor'].map((p) => [p, api])) }
 });

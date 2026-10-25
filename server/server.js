@@ -1,4 +1,4 @@
-// Spielrunden: ein Node-Prozess für SPA (dist/), Galerie-Dateien, Abenteuer-Seiten und Login über Chatto.
+// Spielrunden: ein Node-Prozess für SPA (dist/), Spiele (Dateien, Karte, Abenteuer-Seiten) und Login über Chatto.
 // Nur Node-Standardbibliothek. Konfiguration per Env:
 //   CHATTO_URL, PUBLIC_URL   Login über Chatto (OAuth + PKCE, wir sind CIMD-Client)
 //   DEV_USER=<Name>          nur lokal: jeder Request ist als dieser Nutzer angemeldet
@@ -17,7 +17,6 @@ const dist = join(app, 'dist');
 const pdfjs = join(app, 'node_modules/pdfjs-dist');
 const data = resolve(process.env.DATA || 'data');
 const filesDir = join(data, 'files');
-const wikiDir = join(data, 'wiki');
 const port = Number(process.env.PORT || 8080);
 const chatto = process.env.CHATTO_URL?.replace(/\/+$/, '');
 const publicUrl = process.env.PUBLIC_URL?.replace(/\/+$/, '');
@@ -32,7 +31,6 @@ if (!devUser && !(chatto && publicUrl)) {
 if (devUser) console.warn(`\n  ACHTUNG: DEV_USER=${devUser} – jeder Request ist ohne Login angemeldet. Nur lokal benutzen!\n`);
 
 await mkdir(filesDir, { recursive: true });
-await mkdir(wikiDir, { recursive: true });
 // HMAC-Schlüssel für die Sitzungs-Cookies, beim ersten Start erzeugt
 const secretFile = join(data, '.secret');
 const secret = await readFile(secretFile, 'utf8').catch(async () => {
@@ -69,13 +67,14 @@ function html(res, status, text, link = '/oauth/login', label = 'Nochmal anmelde
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
-/** URL-Pfad (noch kodiert) → absoluter Pfad unter root, oder HttpError 404. Versteckte Segmente verboten. */
-function safePath(root, raw, allowThumbs = false) {
+/** URL-Pfad (noch kodiert) → absoluter Pfad unter root, oder HttpError 404. Versteckte Segmente verboten.
+ *  files=true: Ausnahmen <Spiel>/.karte/… und <Spiel>/.wiki/… (nur als zweites Segment); thumbs=true: <ordner>/.thumbs/<name> */
+function safePath(root, raw, files = false, thumbs = false) {
     let rel;
     try { rel = decodeURIComponent(raw); } catch { throw new HttpError(400); }
     const parts = rel.split('/').filter(Boolean);
-    // Einzige Ausnahme: <ordner>/.thumbs/<name>.webp (Vorschaubilder)
-    const hidden = parts.some((p, i) => p.startsWith('.') && !(allowThumbs && p === '.thumbs' && i === parts.length - 2));
+    const ok = (p, i) => (files && i === 1 && (p === '.karte' || p === '.wiki')) || (thumbs && p === '.thumbs' && i === parts.length - 2);
+    const hidden = parts.some((p, i) => p.startsWith('.') && !ok(p, i));
     if (hidden || rel.includes('\0') || rel.includes('\\')) throw new HttpError(404);
     const full = resolve(root, '.' + sep + parts.join(sep));
     if (full !== root && !full.startsWith(root + sep)) throw new HttpError(404);
@@ -239,15 +238,41 @@ async function oauth(req, res, url) {
     throw new HttpError(404);
 }
 
-// ---- Abenteuer-Seiten ($DATA/wiki/<nr>.json) ----
+// ---- Spiele ($DATA/files/<Spiel>/, Karte in .karte/, Seiten in .wiki/<nr>.json) ----
 
-const pageFile = (nr) => join(wikiDir, `${nr}.json`);
-const readPage = (nr) => readFile(pageFile(nr), 'utf8').then(JSON.parse, () => { throw new HttpError(404); });
+/** URL-Segment → Ordner eines existierenden Spiels, sonst 404 */
+async function gameDir(raw) {
+    const dir = safePath(filesDir, raw);
+    if (resolve(dir, '..') !== filesDir || !await isDir(dir)) throw new HttpError(404);
+    return dir;
+}
 
-async function writePage(page) {
-    const tmp = pageFile(page.nr) + '.tmp';
+const karteRe = /^karte\.(jpg|jpeg|png|webp)$/;
+const pageRe = /^\d+\.json$/;
+const pageNrs = (wiki) => readdir(wiki).then((n) => n.filter((f) => pageRe.test(f)).map((f) => parseInt(f)), () => []);
+
+/** Eintrag für /api/spiele: Karten-URLs mit ?v=<mtime>, Anzahl Abenteuer */
+async function gameInfo(dir) {
+    const name = dir.slice(filesDir.length + 1);
+    const karte = join(dir, '.karte');
+    const names = await readdir(karte).catch(() => []);
+    const url = async (file) => {
+        const s = file && await stat(join(karte, file)).catch(() => null);
+        return s?.isFile() ? `/files/${encodeURIComponent(name)}/.karte/${file}?v=${Math.round(s.mtimeMs)}` : null;
+    };
+    return {
+        name, karte: await url(names.find((n) => karteRe.test(n))), overlay: await url('overlay.svg'),
+        vorschau: await url('vorschau.webp'), abenteuer: (await pageNrs(join(dir, '.wiki'))).length
+    };
+}
+
+const pageFile = (wiki, nr) => join(wiki, `${nr}.json`);
+const readPage = (wiki, nr) => readFile(pageFile(wiki, nr), 'utf8').then(JSON.parse, () => { throw new HttpError(404); });
+
+async function writePage(wiki, page) {
+    const tmp = pageFile(wiki, page.nr) + '.tmp';
     await writeFile(tmp, JSON.stringify(page, null, 2));
-    await rename(tmp, pageFile(page.nr));
+    await rename(tmp, pageFile(wiki, page.nr));
     return page;
 }
 
@@ -259,34 +284,47 @@ function serial(fn) {
     return run;
 }
 
-const coord = (v) => {
+// x/y: Anteile 0…1 der Karte (4 Stellen) oder beide null = Abenteuer ohne Ort
+const unit = (v) => {
     if (!Number.isFinite(v)) throw new HttpError(400, 'x/y fehlen');
-    return Math.round(v);
+    return Math.round(Math.min(1, Math.max(0, v)) * 1e4) / 1e4;
 };
+const pos = ({ x, y }) => (x === null && y === null ? { x: null, y: null } : { x: unit(x), y: unit(y) });
 const str = (v) => (v == null ? '' : String(v));
 
-async function pagesApi(req, res, url, me) {
-    const [, nrRaw, sub] = url.pathname.match(/^\/api\/pages(?:\/([^/]+))?(?:\/([^/]+))?$/) || [];
+async function spieleApi(req, res, url, me) {
+    const m = req.method;
+    const [, gameRaw, pages, nrRaw, sub] = url.pathname.match(/^\/api\/spiele(?:\/([^/]+)(?:\/(pages)(?:\/([^/]+)(?:\/([^/]+))?)?)?)?$/) || [];
+    if (!gameRaw) {
+        if (url.pathname !== '/api/spiele' || m !== 'GET') throw new HttpError(url.pathname === '/api/spiele' ? 405 : 404);
+        const names = (await listDir(filesDir)).filter((e) => e.type === 'directory').map((e) => e.name);
+        names.sort((a, b) => a.localeCompare(b, 'de', { numeric: true }));
+        return json(res, 200, await Promise.all(names.map((n) => gameInfo(join(filesDir, n)))));
+    }
+    const dir = await gameDir('/' + gameRaw);
+    if (!pages) {
+        if (m !== 'GET') throw new HttpError(405);
+        return json(res, 200, await gameInfo(dir));
+    }
+    const wiki = join(dir, '.wiki');
     if (nrRaw !== undefined && !/^\d+$/.test(nrRaw)) throw new HttpError(404);
     const nr = Number(nrRaw);
-    const m = req.method;
     const stamp = (page) => ({ ...page, updated: new Date().toISOString(), updatedBy: me.name });
 
     if (nrRaw === undefined && m === 'GET') {
-        const names = (await readdir(wikiDir)).filter((n) => /^\d+\.json$/.test(n));
-        const pages = await Promise.all(names.map((n) => readPage(parseInt(n)).catch(() => null)));
-        return json(res, 200, pages.filter(Boolean).map(({ nr, title, x, y }) => ({ nr, title, x, y })).sort((a, b) => a.nr - b.nr));
+        const all = await Promise.all((await pageNrs(wiki)).map((n) => readPage(wiki, n).catch(() => null)));
+        return json(res, 200, all.filter(Boolean).map(({ nr, title, x, y }) => ({ nr, title, x, y })).sort((a, b) => a.nr - b.nr));
     }
     if (nrRaw === undefined && m === 'POST') {
         const body = await readJson(req);
-        const x = coord(body.x), y = coord(body.y);
+        const xy = pos(body);
         const page = await serial(async () => {
-            const nrs = (await readdir(wikiDir)).filter((n) => /^\d+\.json$/.test(n)).map((n) => parseInt(n));
-            return writePage(stamp({ nr: Math.max(0, ...nrs) + 1, title: str(body.title).trim(), x, y, blocks: [] }));
+            await mkdir(wiki, { recursive: true });
+            return writePage(wiki, stamp({ nr: Math.max(0, ...await pageNrs(wiki)) + 1, title: str(body.title).trim(), ...xy, blocks: [] }));
         });
         return json(res, 201, page);
     }
-    if (nrRaw !== undefined && !sub && m === 'GET') return json(res, 200, await readPage(nr));
+    if (nrRaw !== undefined && !sub && m === 'GET') return json(res, 200, await readPage(wiki, nr));
     if (nrRaw !== undefined && !sub && m === 'PUT') {
         const body = await readJson(req);
         if (!Array.isArray(body.blocks)) throw new HttpError(400, 'blocks fehlt');
@@ -295,26 +333,25 @@ async function pagesApi(req, res, url, me) {
             type: str(type), ...(text != null && { text: str(text) }), ...(file != null && { file: str(file) })
         }));
         return serial(async () => {
-            const page = await readPage(nr);
+            const page = await readPage(wiki, nr);
             if (body.updated !== page.updated) return json(res, 409, page);
-            json(res, 200, await writePage(stamp({ ...page, title: str(body.title), blocks })));
+            json(res, 200, await writePage(wiki, stamp({ ...page, title: str(body.title), blocks })));
         });
     }
     if (nrRaw !== undefined && sub === 'pos' && m === 'PUT') {
-        const body = await readJson(req);
-        const x = coord(body.x), y = coord(body.y);
-        return json(res, 200, await serial(async () => writePage({ ...await readPage(nr), x, y })));
+        const xy = pos(await readJson(req));
+        return json(res, 200, await serial(async () => writePage(wiki, { ...await readPage(wiki, nr), ...xy })));
     }
     if (nrRaw !== undefined && !sub && m === 'DELETE') {
         await serial(async () => {
-            await readPage(nr);
-            await rm(pageFile(nr));
-            await rm(join(wikiDir, String(nr)), { recursive: true, force: true });
+            await readPage(wiki, nr);
+            await rm(pageFile(wiki, nr));
+            await rm(join(wiki, String(nr)), { recursive: true, force: true });
         });
         res.writeHead(204);
         return res.end();
     }
-    throw new HttpError(m === 'GET' ? 404 : 405);
+    throw new HttpError(m === 'GET' || sub ? 404 : 405);
 }
 
 // ---- Galerie ($DATA/files) ----
@@ -333,19 +370,17 @@ async function listDir(dir) {
 
 async function files(req, res, url) {
     const raw = url.pathname.slice('/files'.length);
-    if (req.method === 'PUT') {
+    if (req.method === 'PUT') return upload(req, res, raw);
+    if (req.method === 'DELETE') {
+        // Einziges DELETE: Beschriftung der Karte entfernen
         const target = safePath(filesDir, raw, true);
-        const dir = resolve(target, '..');
-        if (raw.endsWith('/') || target === filesDir) throw new HttpError(400);
-        const thumb = dir.endsWith(sep + '.thumbs');
-        if (thumb && !target.endsWith('.webp')) throw new HttpError(400);
-        if (!await isDir(thumb ? resolve(dir, '..') : dir)) throw new HttpError(404, 'Ordner fehlt');
-        if (thumb) await mkdir(dir, { recursive: true });
-        await receive(req, target, thumb);
-        res.writeHead(201);
+        const parts = target.slice(filesDir.length + 1).split(sep);
+        if (parts.length !== 3 || parts[1] !== '.karte' || parts[2] !== 'overlay.svg') throw new HttpError(405);
+        await unlink(target).catch(() => { throw new HttpError(404); });
+        res.writeHead(204);
         return res.end();
     }
-    const target = safePath(filesDir, raw);
+    const target = safePath(filesDir, raw, true);
     if (await isDir(target)) {
         if (!raw.endsWith('/')) {
             res.writeHead(301, { Location: url.pathname + '/' });
@@ -356,27 +391,45 @@ async function files(req, res, url) {
     return sendFile(req, res, target, 'no-cache', true);
 }
 
+/** PUT /files/…: Spiel-Dateien, .thumbs, .karte (feste Namen, überschreibbar), .wiki/<nr>/<name> */
+async function upload(req, res, raw) {
+    const target = safePath(filesDir, raw, true, true);
+    if (raw.endsWith('/')) throw new HttpError(400);
+    const parts = target.slice(filesDir.length + 1).split(sep);
+    const dir = resolve(target, '..'), name = parts.at(-1);
+    // Nur innerhalb eines existierenden Spiels
+    if (parts.length < 2 || target === filesDir) throw new HttpError(403);
+    if (!await isDir(join(filesDir, parts[0]))) throw new HttpError(404, 'Spiel fehlt');
+    let overwrite = false;
+    if (parts[1] === '.karte') {
+        if (parts.length !== 3 || !(karteRe.test(name) || name === 'overlay.svg' || name === 'vorschau.webp')) throw new HttpError(403);
+        await mkdir(dir, { recursive: true });
+        overwrite = true;
+    } else if (parts[1] === '.wiki') {
+        if (parts.length !== 4 || !/^[1-9]\d*$/.test(parts[2])) throw new HttpError(403);
+        await stat(join(filesDir, parts[0], '.wiki', `${parts[2]}.json`)).catch(() => { throw new HttpError(404, 'Seite fehlt'); });
+        await mkdir(dir, { recursive: true });
+    } else if (parts.at(-2) === '.thumbs') {
+        if (parts.length < 3 || !name.endsWith('.webp')) throw new HttpError(400);
+        if (!await isDir(resolve(dir, '..'))) throw new HttpError(404, 'Ordner fehlt');
+        await mkdir(dir, { recursive: true });
+        overwrite = true;
+    } else if (!await isDir(dir)) throw new HttpError(404, 'Ordner fehlt');
+    await receive(req, target, overwrite);
+    // Genau ein Kartenbild: die anderen karte.* weg, die alte Vorschau auch (die neue lädt der Browser danach)
+    if (parts[1] === '.karte' && karteRe.test(name)) {
+        for (const n of await readdir(dir)) if ((karteRe.test(n) && n !== name) || n === 'vorschau.webp') await unlink(join(dir, n)).catch(() => {});
+    }
+    res.writeHead(201);
+    res.end();
+}
+
 async function thumb(req, res, url) {
-    const target = safePath(filesDir, url.pathname.slice('/thumb'.length));
+    const target = safePath(filesDir, url.pathname.slice('/thumb'.length), true);
     const dir = resolve(target, '..');
     const small = join(dir, '.thumbs', target.slice(dir.length + 1) + '.webp');
     const cache = 'private, max-age=2592000';
     return sendFile(req, res, await stat(small).then(() => small, () => target), cache, true);
-}
-
-async function wikiFiles(req, res, url) {
-    const [, nrRaw, name] = url.pathname.match(/^\/wiki\/(\d+)\/([^/]+)$/) || [];
-    if (!nrRaw) throw new HttpError(404);
-    const nr = String(Number(nrRaw));
-    const target = safePath(wikiDir, `/${nr}/${name}`);
-    if (req.method === 'PUT') {
-        await readPage(nr);
-        await mkdir(join(wikiDir, nr), { recursive: true });
-        await receive(req, target);
-        res.writeHead(201);
-        return res.end();
-    }
-    return sendFile(req, res, target, 'no-cache', true);
 }
 
 // ---- Statisches: dist/ und PDF.js ----
@@ -393,7 +446,7 @@ async function vendor(req, res, url) {
 function staticFile(req, res, url) {
     const p = url.pathname === '/' ? '/index.html' : url.pathname;
     const cache = /^\/assets\//.test(p) ? 'public, max-age=31536000, immutable'
-        : /^\/(map|fonts)\//.test(p) ? 'public, max-age=86400' : 'no-cache';
+        : /^\/fonts\//.test(p) ? 'public, max-age=86400' : 'no-cache';
     return sendFile(req, res, safePath(dist, p), cache);
 }
 
@@ -409,7 +462,7 @@ createServer(async (req, res) => {
         const read = req.method === 'GET' || req.method === 'HEAD';
         if (p.startsWith('/oauth/')) return await oauth(req, res, url);
         if (p.startsWith('/vendor/pdfjs/') && read) return await vendor(req, res, url);
-        const area = p.match(/^\/(api|files|thumb|wiki)\//)?.[1];
+        const area = p.match(/^\/(api|files|thumb)\//)?.[1];
         if (!area) {
             if (!read) throw new HttpError(405);
             return await staticFile(req, res, url);
@@ -419,12 +472,10 @@ createServer(async (req, res) => {
         if (!me) throw new HttpError(401, 'Nicht angemeldet');
         if (area === 'api') {
             if (p === '/api/me' && read) return json(res, 200, me);
-            if (/^\/api\/pages(\/|$)/.test(p)) return await pagesApi(req, res, url, me);
+            if (/^\/api\/spiele(\/|$)/.test(p)) return await spieleApi(req, res, url, me);
             throw new HttpError(404);
         }
-        if (!read && req.method !== 'PUT') throw new HttpError(405);
-        if (area === 'files') return await files(req, res, url);
-        if (area === 'wiki') return await wikiFiles(req, res, url);
+        if (area === 'files' && (read || req.method === 'PUT' || req.method === 'DELETE')) return await files(req, res, url);
         if (read) return await thumb(req, res, url);
         throw new HttpError(405);
     } catch (e) {

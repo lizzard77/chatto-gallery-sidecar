@@ -48,6 +48,7 @@ test('Verschieben, Namen, Befehle, Speichern', () => {
   assert.equal(safeName('../.x/y.png'), '_.x_y.png');
   assert.deepEqual(filterCommands('ein').map((c) => c.type), ['entry']);
   assert.ok(filterCommands('uber').some((c) => c.type === 'h2'));
-  assert.equal(filterCommands('').length, 9);
+  assert.equal(filterCommands('').length, 10);
+  assert.deepEqual(filterCommands('link').map((c) => c.type), ['link']);
   assert.equal(withIds([]).map((b) => b.type).join(), 'entry,p');
 });
