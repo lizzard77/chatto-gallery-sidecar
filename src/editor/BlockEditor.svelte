@@ -7,7 +7,7 @@
   import FilePicker from './FilePicker.svelte';
   import Lightbox from '../Lightbox.svelte';
   import { upload, fileUrl, enc } from '../api.js';
-  import { showPdf } from '../pdfviewer.js';
+  import PdfOverlay from '../PdfOverlay.svelte';
   import { isText, newBlock, splitBlock, mergeBack, moveBlock, numbered, safeName, filterCommands } from './blocks.js';
   import { readText, caretOffset, setCaret, atEdgeLine, renderInline, selectionOffsets, selectOffsets, offsetAtPoint } from './caret.js';
   import { toggleMark, linkMarkdown, linkAction } from './inline.js';
@@ -16,7 +16,7 @@
 
   let root;
   let picker;
-  let pdfDialog, pdfBox, closePdf;
+  let pdfUrl = $state(null); // offenes PDF-Overlay
   let slash = $state(null); // { id, query, active } solange das Menü offen ist
   let menuFor = $state(null); // Block mit offenem Griff-Menü
   let busy = $state(''); // Upload-Fortschritt bzw. Fehler
@@ -429,15 +429,8 @@
     } else window.open(url, '_blank', 'noopener');
   }
 
-  function openPdf(url) {
-    pdfDialog.showModal();
-    closePdf = showPdf(pdfBox, { url });
-  }
-  function onPdfClose() {
-    closePdf?.();
-    closePdf = null;
-    pdfBox?.replaceChildren(); // beim Verlassen der Seite schon weg
-  }
+  const openPdf = (url) => (pdfUrl = url);
+
 </script>
 
 <svelte:document {onselectionchange} />
@@ -491,10 +484,7 @@
 
 <Lightbox images={linkImages ?? images} bind:index={lightboxIndex} />
 
-<dialog class="pdf-overlay" bind:this={pdfDialog} onclose={onPdfClose} aria-label="PDF">
-  <button type="button" class="pdf-close" aria-label="Schließen" onclick={() => pdfDialog.close()}>✕</button>
-  <div class="pdf-box" bind:this={pdfBox}></div>
-</dialog>
+{#if pdfUrl}<PdfOverlay url={pdfUrl} onclose={() => (pdfUrl = null)} />{/if}
 
 <style>
   .editor { position: relative; }
@@ -529,31 +519,4 @@
   .format-bar .italic { font-style: italic; }
   .link-menu button { font-size: 16px; white-space: nowrap; }
 
-  .pdf-overlay {
-    width: 100vw;
-    height: 100dvh;
-    max-width: none;
-    max-height: none;
-    margin: 0;
-    padding: 0;
-    border: 0;
-    background: var(--bg, #0d1626);
-    color: var(--text, #e8e4d8);
-  }
-  .pdf-overlay::backdrop { background: rgba(5, 9, 18, 0.8); }
-  .pdf-box { height: 100%; overflow: auto; padding: 16px 16px 24px; }
-  .pdf-overlay :global(.pdf-toolbar) { padding-right: 56px; }
-  .pdf-close {
-    position: fixed;
-    top: 6px;
-    right: 8px;
-    z-index: 3;
-    border: 0;
-    background: none;
-    color: inherit;
-    font-size: 26px;
-    cursor: pointer;
-    opacity: 0.8;
-  }
-  .pdf-close:hover { opacity: 1; }
 </style>

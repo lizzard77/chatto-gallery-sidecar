@@ -5,7 +5,7 @@
   // Hochladen per Knopf oder Drag & Drop; für Bilder baut der Browser gleich ein Vorschaubild.
   import { getJson, upload, enc } from './api.js';
   import { makeThumb } from './thumb.js';
-  import { showPdf } from './pdfviewer.js';
+  import PdfOverlay from './PdfOverlay.svelte';
   import Lightbox from './Lightbox.svelte';
 
   /** spiel = Ordner unter files/; path = roher Hash-Rest hinter dateien/, URL-kodiert, z. B. "Mira/" */
@@ -51,7 +51,9 @@
 
   const segments = $derived(path.split('/').filter(Boolean).map(decode));
   const isPdf = $derived(!path.endsWith('/') && PDF.test(segments.at(-1) ?? ''));
-  const canUpload = $derived(!isPdf);
+  // Ein PDF öffnet als Overlay über seinem Ordner
+  const dir = $derived(isPdf ? segments.slice(0, -1) : segments);
+  const canUpload = true;
 
   let error = $state('');
   let loaded = $state(false);
@@ -61,11 +63,10 @@
   let lightbox = $state(null);
   let status = $state('');
   let dragging = $state(false);
-  let pdfBox = $state();
 
   async function load(segs, scroll) {
     const key = enc(spiel, ...segs);
-    const current = () => key === enc(spiel, ...segments);
+    const current = () => key === enc(spiel, ...dir);
     let entries;
     try {
       entries = await list(segs);
@@ -111,14 +112,9 @@
 
   // Neuer Pfad: Lightbox zu, Ordner laden (den Seitentitel setzt App.svelte)
   $effect(() => {
-    const segs = segments;
+    const segs = dir;
     lightbox = null;
-    if (isPdf) window.scrollTo(0, 0);
-    else load(segs, true);
-  });
-
-  $effect(() => {
-    if (isPdf && pdfBox) return showPdf(pdfBox, { url: rawUrl(segments) });
+    load(segs, !isPdf);
   });
 
   // Beim Zurückkehren in den Tab (z. B. aus Chatto) neu laden, damit frisch hochgeladene
@@ -126,14 +122,14 @@
   function onvisibilitychange() {
     if (document.visibilityState !== 'visible' || lightbox !== null || isPdf) return;
     listings.clear();
-    load(segments, false);
+    load(dir, false);
   }
 
   /** Lädt Dateien in den aktuellen Ordner; vorhandene Namen bekommen " (2)", " (3)" … */
   async function uploadFiles(files) {
     files = [...files];
     if (!files.length || !canUpload) return;
-    const segs = segments;
+    const segs = dir;
     try {
       for (const [i, file] of files.entries()) {
         status = `Lade ${i + 1}/${files.length} hoch …`;
@@ -147,7 +143,7 @@
       status = e.status === 413 ? 'Fehler: Datei zu groß (max. 100 MB)' : `Fehler beim Hochladen: ${e.message}`;
     }
     listings.clear();
-    load(segments, false);
+    load(dir, false);
   }
 
   async function uploadUnique(segs, file) {
@@ -208,9 +204,7 @@
 </div>
 
 <main class="gallery" class:dragging aria-live="polite">
-  {#if isPdf}
-    <div bind:this={pdfBox}></div>
-  {:else if error}
+  {#if error}
     <p class="error">{error}</p>
   {:else if loaded}
     {#if docs.length}
@@ -254,3 +248,4 @@
 </main>
 
 <Lightbox {images} bind:index={lightbox} />
+{#if isPdf}<PdfOverlay url={rawUrl(segments)} onclose={() => (location.hash = folderHref(dir))} />{/if}

@@ -298,7 +298,6 @@ a { color: inherit; }
   border-bottom: 1px solid var(--border);
 }
 /* In der Galerie klebt die Leiste unter der Kopfzeile, über die volle Inhaltsbreite */
-.gallery .pdf-toolbar { top: var(--bar-height); margin: -16px -16px 12px; }
 .pdf-toolbar .page-count { font-size: 13px; color: var(--muted); }
 .pdf-toolbar .zoom { display: inline-flex; align-items: center; gap: 4px; }
 .pdf-toolbar .zoom button {
