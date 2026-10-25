@@ -315,7 +315,7 @@ a { color: inherit; }
 .pdf-toolbar .zoom button:disabled { opacity: 0.4; cursor: default; }
 .pdf-toolbar .zoom-label { min-width: 48px; text-align: center; font-size: 13px; font-variant-numeric: tabular-nums; }
 .pdf-scroller { overflow-x: auto; }
-.pdf-pages { display: flex; flex-direction: column; gap: 12px; margin: 0 auto; }
+.pdf-pages { display: grid; gap: 12px; justify-content: center; width: max-content; min-width: 100%; }
 .pdf-page {
   width: 100%;
   background: #fff;

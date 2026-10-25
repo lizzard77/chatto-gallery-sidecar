@@ -3,7 +3,9 @@
 // der PDFs sonst nur herunterlädt. PDF.js liefert der Server unter /vendor/pdfjs/ aus node_modules aus.
 // Benutzt von der Galerie (eigene Route) und vom Wiki (Overlay): showPdf(container, { url }).
 
-const ZOOMS = [1, 1.5, 2, 3];
+// Zoom relativ zu „Seite passt in die Höhe“; zwei Seiten nebeneinander, wenn die Breite reicht
+const ZOOMS = [1, 1.5, 2, 3, 4];
+const GAP = 12;
 // Obergrenze pro Canvas: mobile Browser verweigern größere Flächen oder werden langsam
 const MAX_CANVAS_PIXELS = 16_000_000;
 
@@ -75,7 +77,16 @@ export function showPdf(container, { url }) {
     zoomLabel.textContent = `${Math.round(ZOOMS[zoomIndex] * 100)} %`;
     zoomOut.disabled = zoomIndex === 0;
     zoomIn.disabled = zoomIndex === ZOOMS.length - 1;
-    sheet.style.width = `${ZOOMS[zoomIndex] * 100}%`;
+    layout();
+  }
+
+  // Seitenbreite: erste Seite passt ganz in die sichtbare Höhe (nie breiter als der Platz), mal Zoom
+  let aspect = 1 / Math.SQRT2;
+  function layout() {
+    const cw = scroller.clientWidth || container.clientWidth;
+    const h = Math.max(200, innerHeight - toolbar.getBoundingClientRect().bottom - 2 * GAP);
+    const w = Math.round(Math.min(cw, h * aspect) * ZOOMS[zoomIndex]);
+    sheet.style.gridTemplateColumns = `repeat(${cw >= 2 * w + GAP ? 2 : 1}, ${w}px)`;
     rerender();
   }
 
@@ -127,7 +138,7 @@ export function showPdf(container, { url }) {
     page.canvas = canvas;
   }
 
-  const onResize = () => rerender();
+  const onResize = () => layout();
   window.addEventListener('resize', onResize);
 
   (async () => {
@@ -147,6 +158,7 @@ export function showPdf(container, { url }) {
       pageCount.textContent = doc.numPages === 1 ? '1 Seite' : `${doc.numPages} Seiten`;
       // Seitenformat der ersten Seite als Platzhalter, bis die Seite selbst geladen ist
       const first = (await doc.getPage(1)).getViewport({ scale: 1 });
+      aspect = first.width / first.height;
       for (let index = 0; index < doc.numPages; index++) {
         const canvas = document.createElement('canvas');
         const wrap = el('div', { class: 'pdf-page', 'data-index': String(index) }, canvas);

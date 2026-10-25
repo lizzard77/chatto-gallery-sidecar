@@ -6,7 +6,7 @@
   import Block from './Block.svelte';
   import FilePicker from './FilePicker.svelte';
   import Lightbox from '../Lightbox.svelte';
-  import { upload, fileUrl } from '../api.js';
+  import { upload, fileUrl, enc } from '../api.js';
   import { showPdf } from '../pdfviewer.js';
   import { isText, newBlock, splitBlock, mergeBack, moveBlock, numbered, safeName, filterCommands } from './blocks.js';
   import { readText, caretOffset, setCaret, atEdgeLine, renderInline, selectionOffsets, selectOffsets, offsetAtPoint } from './caret.js';
@@ -25,6 +25,7 @@
   let linkImages = $state(null); // Bild aus einem Link in der Lightbox (statt der Bilder der Seite)
   let bar = $state(null); // Werkzeugleiste über markiertem Text: { x, y }
   let linkReq = $state(null); // offene Datei-Auswahl: { id, start, end } (Auswahl bzw. Cursor im Block)
+  let linkMenu = $state(null); // Menü zu einem Link (langes Tippen/Rechtsklick): { a, x, y }
   let linkClick = null; // Link, auf den in einem Block ohne Fokus gedrückt wurde
   let clickAt = null; // Klick in einen Block ohne Fokus: { el, offset } (s. onpointerdown)
   let current = null; // zuletzt fokussierter Block (Einfügestelle für Uploads)
@@ -378,9 +379,9 @@
   function onpointerdown(e) {
     const el = e.target.closest?.('.txt');
     const a = e.target.closest?.('a.md-link');
-    const unfocused = el && e.button === 0 && el !== document.activeElement;
-    linkClick = unfocused && a ? a : null;
-    if (linkClick) e.preventDefault();
+    const unfocused = el && el !== document.activeElement;
+    linkClick = unfocused && a && e.button === 0 ? a : null;
+    if (unfocused && a) e.preventDefault(); // auch Rechts-/Mittelklick auf einen Link setzt keinen Cursor
     // Mit dem Fokus werden die Markierungszeichen sichtbar und der Text verschiebt sich – Cursor-Stelle vorher merken
     clickAt = unfocused && !a ? { el, offset: offsetAtPoint(el, e.clientX, e.clientY) } : null;
   }
@@ -390,8 +391,31 @@
     const a = e.target.closest?.('a.md-link');
     if (!a) return;
     e.preventDefault();
-    if (a === linkClick || e.ctrlKey || e.metaKey) openTarget(a);
+    if (e.ctrlKey || e.metaKey) openTab(a);
+    else if (a === linkClick) openTarget(a);
     linkClick = null;
+  }
+  // Mittelklick: neuer Tab
+  function onauxclick(e) {
+    const a = e.button === 1 && e.target.closest?.('a.md-link');
+    if (a) { e.preventDefault(); openTab(a); }
+  }
+  // Langes Tippen (Touch) bzw. Rechtsklick auf einen Link: kleines Menü statt Text markieren.
+  // Ein Tab direkt nach einem Timer würde als Popup blockiert, ein Tipp auf den Menüpunkt nicht.
+  function oncontextmenu(e) {
+    const a = e.target.closest?.('a.md-link');
+    if (!a) return;
+    e.preventDefault();
+    getSelection().removeAllRanges();
+    const r = a.getBoundingClientRect(), box = root.getBoundingClientRect();
+    linkMenu = { a, x: r.left + r.width / 2 - box.left, y: r.top - box.top };
+  }
+  /** Neuer Tab: PDFs aus dem Spiel im eigenen Viewer (Dateien-Route), alles andere direkt */
+  function openTab(a) {
+    linkMenu = null;
+    const url = a.getAttribute('href'), files = `/files/${enc(spiel)}/`;
+    const tab = /\.pdf$/i.test(url) && url.startsWith(files) ? `${location.pathname}#/${enc(spiel)}/dateien/${url.slice(files.length)}` : url;
+    window.open(tab, '_blank', 'noopener');
   }
   function openTarget(a) {
     const url = a.getAttribute('href');
@@ -419,12 +443,13 @@
 <svelte:document {onselectionchange} />
 <svelte:window {ondragover} {ondrop}
   ondragleave={(e) => { if (!e.relatedTarget) dragging = false; }}
-  onclick={(e) => { if (menuFor && !e.target.closest?.('.handle, .block-menu')) menuFor = null; }} />
+  onclick={(e) => { if (menuFor && !e.target.closest?.('.handle, .block-menu')) menuFor = null; if (linkMenu && !e.target.closest?.('.link-menu')) linkMenu = null; }}
+  onkeydown={(e) => { if (e.key === 'Escape') linkMenu = null; }} onscroll={() => (linkMenu = null)} />
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="editor" class:dragging bind:this={root} {oninput} {onkeydown}
-  onbeforeinput={(e) => { if (e.inputType === 'historyUndo' || e.inputType === 'historyRedo') { e.preventDefault(); undo(e.inputType === 'historyRedo'); } }} {onpaste} {onpointerdown} {onclick}
-  onmousedown={(e) => { if (linkClick) e.preventDefault(); }}
+  onbeforeinput={(e) => { if (e.inputType === 'historyUndo' || e.inputType === 'historyRedo') { e.preventDefault(); undo(e.inputType === 'historyRedo'); } }} {onpaste} {onpointerdown} {onclick} {onauxclick} {oncontextmenu}
+  onmousedown={(e) => { if (linkClick || (e.button && e.target.closest?.('a.md-link') && e.target.closest('.txt') !== document.activeElement)) e.preventDefault(); }}
   oncompositionend={(e) => { const hit = hitOf(e.target); if (hit) renderInline(hit.el, readText(hit.el), href); }}
   onfocusin={(e) => { current = hitOf(e.target)?.id ?? current; if (slash && hitOf(e.target)?.id !== slash.id) slash = null; }}>
   {#each blocks as block (block.id)}
@@ -440,6 +465,13 @@
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div class="tail" onclick={onTail}></div>
   {#if busy}<p class="busy" role="status">{busy}</p>{/if}
+  {#if linkMenu}
+    <div class="format-bar link-menu" role="menu" tabindex="-1" style:left="{linkMenu.x}px" style:top="{linkMenu.y}px"
+      onmousedown={(e) => e.preventDefault()}>
+      <button type="button" role="menuitem" onclick={() => { const { a } = linkMenu; linkMenu = null; openTarget(a); }}>Öffnen</button>
+      <button type="button" role="menuitem" onclick={() => openTab(linkMenu.a)}>In neuem Tab öffnen</button>
+    </div>
+  {/if}
   {#if bar}
     <!-- mousedown verhindern: die Auswahl im Block bleibt -->
     <div class="format-bar" role="toolbar" tabindex="-1" aria-label="Formatierung" style:left="{bar.x}px" style:top="{bar.y}px"
@@ -495,6 +527,7 @@
   .format-bar button:hover { background: linear-gradient(#f4e2ad, #d6b062); }
   .format-bar .bold { font-weight: bold; }
   .format-bar .italic { font-style: italic; }
+  .link-menu button { font-size: 16px; white-space: nowrap; }
 
   .pdf-overlay {
     width: 100vw;
