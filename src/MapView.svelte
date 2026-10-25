@@ -6,12 +6,18 @@
   import { getJson, sendJson } from './api.js';
 
   const W = 4800, H = 3584;
-  const stufen = [100, 175, 300, 500]; // Kartenbreite in % des Rahmens
+  const stufen = [1, 1.75, 3, 5]; // Vielfache der eingepassten Größe
+  const RAND = 40; // Platz über der Karte für Siegel am oberen Rand
 
   let pages = $state([]);
   let fehler = $state('');
   let stufe = $state(0);
-  let modus = $state(''); // '' | 'setzen' | 'schieben'
+  let modus = $state(''); // '' | 'setzen' | 'schieben' | 'bewegen'
+  let rw = $state(0), rh = $state(0); // Größe des Rahmens
+  // Stufe 1: ganze Karte passt in den Rahmen (contain); darüber wird verschoben
+  const breite = $derived(Math.max(0, Math.min(rw, ((rh - RAND) * W) / H)) * stufen[stufe]);
+  const zuGross = $derived(breite > rw + 1 || (breite * H) / W + RAND > rh + 1);
+  let pan = null; // { x, y, sl, st } beim Verschieben der Ansicht
   let neu = $state(null); // { x, y } während der Titel-Dialog offen ist
   let titel = $state('');
   let rahmen, karte, dialog;
@@ -32,13 +38,28 @@
   async function zoom(d) {
     const neuStufe = Math.max(0, Math.min(stufen.length - 1, stufe + d));
     if (neuStufe === stufe) return;
-    const mx = (rahmen.scrollLeft + rahmen.clientWidth / 2) / karte.offsetWidth;
-    const my = (rahmen.scrollTop + rahmen.clientHeight / 2) / karte.offsetHeight;
+    const mx = (rahmen.scrollLeft + rahmen.clientWidth / 2 - karte.offsetLeft) / karte.offsetWidth;
+    const my = (rahmen.scrollTop + rahmen.clientHeight / 2 - karte.offsetTop) / karte.offsetHeight;
     stufe = neuStufe;
     await tick();
-    rahmen.scrollLeft = mx * karte.offsetWidth - rahmen.clientWidth / 2;
-    rahmen.scrollTop = my * karte.offsetHeight - rahmen.clientHeight / 2;
+    rahmen.scrollLeft = karte.offsetLeft + mx * karte.offsetWidth - rahmen.clientWidth / 2;
+    rahmen.scrollTop = karte.offsetTop + my * karte.offsetHeight - rahmen.clientHeight / 2;
   }
+
+  // Ansicht verschieben: rechte Maustaste immer, linke Maus/Finger im Modus „bewegen"
+  function panStart(e) {
+    if (!zuGross || !(e.button === 2 || (modus === 'bewegen' && e.button === 0))) return;
+    e.preventDefault();
+    rahmen.setPointerCapture(e.pointerId);
+    pan = { x: e.clientX, y: e.clientY, sl: rahmen.scrollLeft, st: rahmen.scrollTop };
+  }
+  function panMove(e) {
+    if (!pan) return;
+    rahmen.scrollLeft = pan.sl - (e.clientX - pan.x);
+    rahmen.scrollTop = pan.st - (e.clientY - pan.y);
+  }
+  const panEnd = () => (pan = null);
+  $effect(() => { if (!zuGross && modus === 'bewegen') modus = ''; });
 
   // Bildschirmposition → Originalpixel (begrenzt auf die Karte)
   function aufKarte(e) {
@@ -72,8 +93,9 @@
 
   // Pins verschieben: Zeiger einfangen, Position live mitführen, beim Loslassen speichern
   function greifen(e, p) {
-    if (modus !== 'schieben') return;
+    if (modus !== 'schieben' || e.button !== 0) return;
     e.preventDefault();
+    e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
     zieht = { p, start: { x: p.x, y: p.y }, bewegt: false };
   }
@@ -104,6 +126,7 @@
 <svelte:document onvisibilitychange={() => document.visibilityState === 'visible' && laden()} />
 
 <div class="kartenseite">
+  <div class="oben">
   <div class="werkzeuge">
     <div class="kartusche">
       <span class="klein">Plan der Stadt</span>
@@ -113,7 +136,7 @@
     <div class="knoepfe">
       <span class="gruppe">
         <button class="messing" onclick={() => zoom(-1)} disabled={stufe === 0} aria-label="Verkleinern">−</button>
-        <span class="stufe">{stufen[stufe]} %</span>
+        <span class="stufe">{Math.round(stufen[stufe] * 100)} %</span>
         <button class="messing" onclick={() => zoom(1)} disabled={stufe === stufen.length - 1} aria-label="Vergrößern">+</button>
       </span>
       <button class="messing" class:an={modus === 'setzen'} aria-pressed={modus === 'setzen'} onclick={() => umschalten('setzen')}>
@@ -122,19 +145,23 @@
       <button class="messing" class:an={modus === 'schieben'} aria-pressed={modus === 'schieben'} onclick={() => umschalten('schieben')}>
         Pins verschieben
       </button>
+      <button class="messing hand" class:an={modus === 'bewegen'} aria-pressed={modus === 'bewegen'} disabled={!zuGross}
+        title="Karte bewegen (oder mit der rechten Maustaste ziehen)" aria-label="Karte bewegen" onclick={() => umschalten('bewegen')}>
+        ✋
+      </button>
     </div>
-    {#if modus === 'setzen'}
-      <p class="hinweis">Klicke auf die Karte, wo das Abenteuer spielt. <small>(Esc bricht ab)</small></p>
-    {:else if modus === 'schieben'}
-      <p class="hinweis">Ziehe die Siegel an ihren neuen Ort. <small>(Esc beendet)</small></p>
-    {/if}
-    {#if fehler}<p class="hinweis fehler" role="alert">{fehler}</p>{/if}
   </div>
 
-  <div class="rahmen" bind:this={rahmen}>
+  <div class="kartenfeld">
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="rahmen" class:bewegen={modus === 'bewegen'} class:zieht={pan} bind:this={rahmen}
+      bind:clientWidth={rw} bind:clientHeight={rh}
+      onpointerdown={panStart} onpointermove={panMove} onpointerup={panEnd} onpointercancel={panEnd}
+      oncontextmenu={(e) => zuGross && e.preventDefault()}>
+    <div class="flaeche">
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div class="karte" class:setzen={modus === 'setzen'} class:schieben={modus === 'schieben'}
-      style="width: {stufen[stufe]}%" bind:this={karte} onclick={kartenKlick}>
+      style="width: {breite}px" bind:this={karte} onclick={kartenKlick}>
       <img src="/map/london-1888-basis.jpg" alt="Stadtplan von London, 1888" width={W} height={H} draggable="false" />
       <img class="labels" src="/map/london-1888-labels.svg" alt="" width={W} height={H} draggable="false" />
 
@@ -153,6 +180,17 @@
         <span class="pin geist" style="left: {neu.x / 48}%; top: {neu.y / 35.84}%"><span class="nadel"></span><Pin nr="?" /></span>
       {/if}
     </div>
+    </div>
+    </div>
+    {#if modus === 'setzen'}
+      <p class="hinweis">Klicke auf die Karte, wo das Abenteuer spielt. <small>(Esc bricht ab)</small></p>
+    {:else if modus === 'schieben'}
+      <p class="hinweis">Ziehe die Siegel an ihren neuen Ort. <small>(Esc beendet)</small></p>
+    {:else if modus === 'bewegen'}
+      <p class="hinweis">Ziehe die Karte, um den Ausschnitt zu verschieben. <small>(Esc beendet)</small></p>
+    {/if}
+    {#if fehler}<p class="hinweis fehler" role="alert">{fehler}</p>{/if}
+  </div>
   </div>
 
   {#if pages.length}
@@ -184,8 +222,7 @@
     --p: var(--papier, #efe2c6);
     --t: var(--tinte, #24180d);
     --s: var(--siegel, #8a2b18);
-    min-height: calc(100dvh - 50px);
-    padding: 12px clamp(8px, 2vw, 20px) 28px;
+    padding: 0 clamp(8px, 2vw, 20px) 28px;
     background: var(--p) radial-gradient(ellipse at center, transparent 55%, rgba(120, 80, 30, 0.18));
     color: var(--t);
     font-family: var(--fell, 'IM Fell English', Georgia, serif);
@@ -194,10 +231,11 @@
   /* ---------- Kopf: Kartusche + Messingknöpfe ---------- */
   .werkzeuge {
     display: flex;
+    padding-top: 10px;
     flex-wrap: wrap;
     align-items: center;
     gap: 10px 18px;
-    margin-bottom: 12px;
+    padding-bottom: 10px;
   }
   .kartusche {
     display: grid;
@@ -246,26 +284,45 @@
   .messing:disabled { opacity: 0.45; cursor: default; }
   .messing:focus-visible { outline: 2px solid var(--s); outline-offset: 2px; }
 
-  /* steht neben den Knöpfen, damit die Karte beim Umschalten nicht springt (auf dem Handy darunter) */
+  /* schwebt unten über der Karte, damit die Karte beim Umschalten nicht springt */
   .hinweis {
+    position: absolute;
+    left: 50%;
+    bottom: 14px;
+    transform: translateX(-50%);
+    width: max-content;
+    max-width: calc(100% - 24px);
     margin: 0;
+    padding: 5px 14px;
     font-style: italic;
     font-size: 17px;
+    background: #f6ecd6;
+    border: 3px double var(--t);
+    box-shadow: 0 2px 6px rgba(36, 24, 13, 0.35);
+    pointer-events: none;
   }
+  .hinweis.fehler { bottom: auto; top: 14px; }
   .hinweis small { opacity: 0.7; }
   .fehler { color: var(--s); }
 
   /* ---------- Karte ---------- */
+  /* Werkzeuge + Kartenfeld füllen genau den Bildschirm unter der Kopfleiste */
+  .oben { display: flex; flex-direction: column; height: calc(100dvh - var(--bar-height, 50px)); min-height: 320px; }
+  .kartenfeld { position: relative; flex: 1; min-height: 200px; }
   .rahmen {
+    position: absolute;
+    inset: 0;
     overflow: auto;
-    max-height: calc(100dvh - 70px);
     border: 4px double var(--t);
-    padding-top: 44px; /* Platz für Siegel am oberen Kartenrand, Farbe wie der Kartenrand */
-    background: #f6e0c3;
+    background: #f6e0c3; /* Farbe wie der Kartenrand */
     box-shadow: 0 3px 12px rgba(36, 24, 13, 0.3);
     overscroll-behavior: contain;
   }
-  .karte { position: relative; line-height: 0; user-select: none; -webkit-user-select: none; }
+  .rahmen.bewegen { cursor: grab; touch-action: none; }
+  .rahmen.zieht { cursor: grabbing; }
+  /* Fläche mindestens so groß wie der Rahmen; margin:auto zentriert, ohne beim Zoomen Teile unerreichbar abzuschneiden */
+  .flaeche { position: relative; display: flex; min-width: 100%; min-height: 100%; width: max-content; padding-top: 40px; }
+  .karte { flex: none; margin: auto; position: relative; line-height: 0; user-select: none; -webkit-user-select: none; }
   .karte img { display: block; width: 100%; height: auto; -webkit-user-drag: none; }
   .karte .labels { position: absolute; inset: 0; pointer-events: none; }
   .karte.setzen { cursor: crosshair; }
@@ -379,11 +436,10 @@
 
   @media (max-width: 600px) {
     .werkzeuge { gap: 8px 12px; }
-    .kartusche { padding: 4px 14px 5px; }
-    .kartusche h1 { font-size: 22px; }
-    .kartusche .klein { font-size: 11px; }
-    .knoepfe { gap: 6px; }
-    .messing { font-size: 14px; padding: 5px 9px; }
-    .rahmen { max-height: calc(100dvh - 150px); }
+    .knoepfe { gap: 5px; }
+    .gruppe { gap: 2px; }
+    .stufe { min-width: 2.9em; font-size: 14px; }
+    .messing { font-size: 13px; letter-spacing: 0; padding: 4px 7px; min-width: 34px; min-height: 34px; }
+    .kartusche { display: none; } /* auf dem Handy zählt jeder Pixel Karte */
   }
 </style>
