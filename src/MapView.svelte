@@ -131,6 +131,18 @@
     }
   }
 
+  // Pin vor den anderen verstecken (nur der Ersteller sieht ihn dann noch, blass)
+  async function verstecken(p) {
+    const vorher = p.versteckt;
+    p.versteckt = !vorher;
+    try {
+      await sendJson(`${base}/pages/${p.nr}/versteckt`, 'PUT', { versteckt: p.versteckt });
+    } catch (err) {
+      p.versteckt = vorher;
+      fehler = `Pin ${p.nr} konnte nicht ${vorher ? 'gezeigt' : 'versteckt'} werden (${err.message})`;
+    }
+  }
+
   // ---------- Kartenbild / Beschriftung hochladen ----------
   async function hochladen(arbeit, text) {
     menue = false;
@@ -260,14 +272,14 @@
       {#if info.overlay}<img class="labels" src={info.overlay} alt="" draggable="false" />{/if}
 
       {#each mitOrt as p (p.nr)}
-        <a class="pin" class:links={p.x > 0.78} href={wikiHref(p.nr)}
+        <a class="pin" class:links={p.x > 0.78} class:versteckt={p.versteckt} href={wikiHref(p.nr)}
           style="left: {p.x * 100}%; top: {p.y * 100}%" aria-label="Abenteuer {p.nr}: {p.title}"
           draggable="false"
           onclick={(e) => modus && e.preventDefault()}
           onpointerdown={(e) => greifen(e, p)} onpointermove={ziehen} onpointerup={loslassen} onpointercancel={loslassen}>
           <span class="nadel"></span>
           <Pin nr={p.nr} />
-          <span class="schild">{p.title}</span>
+          <span class="schild">{p.title}{#if p.versteckt} <small>(versteckt)</small>{/if}</span>
         </a>
       {/each}
       {#if neu && neu.x != null}
@@ -301,6 +313,13 @@
                 <Pin nr={p.nr} size={26} /><span>{p.title}</span>
                 {#if p.x == null}<small class="ohneort">ohne Ort</small>{/if}
               </a>
+              {#if p.meins && p.x != null}
+                <button class="auge" class:zu={p.versteckt} onclick={() => verstecken(p)} aria-pressed={!!p.versteckt}
+                  title={p.versteckt ? 'Pin ist vor den anderen versteckt – zeigen' : 'Pin vor den anderen verstecken'}
+                  aria-label={p.versteckt ? `Pin ${p.nr} zeigen` : `Pin ${p.nr} verstecken`}>
+                  {p.versteckt ? '◌' : '◉'}
+                </button>
+              {/if}
             </li>
           {/each}
         </ol>
@@ -555,8 +574,10 @@
     columns: 2 280px;
     column-gap: 28px;
   }
-  .verzeichnis li { break-inside: avoid; border-bottom: 1px dotted rgba(36, 24, 13, 0.4); }
+  .verzeichnis li { display: flex; align-items: center; break-inside: avoid; border-bottom: 1px dotted rgba(36, 24, 13, 0.4); }
   .verzeichnis a {
+    flex: 1;
+    min-width: 0;
     display: flex;
     align-items: center;
     gap: 10px;
@@ -567,6 +588,19 @@
   }
   .verzeichnis a:hover span, .verzeichnis a:focus-visible span { color: var(--s); text-decoration: underline; }
   .verzeichnis .ohneort { margin-left: auto; font-style: italic; font-size: 14px; opacity: 0.65; white-space: nowrap; }
+  .auge {
+    flex: none;
+    padding: 2px 6px;
+    border: 0;
+    background: none;
+    color: var(--t);
+    font-size: 18px;
+    cursor: pointer;
+    opacity: 0.6;
+  }
+  .auge:hover, .auge:focus-visible { opacity: 1; }
+  .auge.zu { color: var(--s); opacity: 0.9; }
+  .pin.versteckt :global(.siegel) { opacity: 0.45; }
   .neuohneort { margin: 14px 0 0; text-align: center; }
 
   /* ---------- Dialog „Titel des Abenteuers" ---------- */

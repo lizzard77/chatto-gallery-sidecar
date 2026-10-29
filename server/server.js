@@ -310,17 +310,25 @@ async function spieleApi(req, res, url, me) {
     if (nrRaw !== undefined && !/^\d+$/.test(nrRaw)) throw new HttpError(404);
     const nr = Number(nrRaw);
     const stamp = (page) => ({ ...page, updated: new Date().toISOString(), updatedBy: me.name });
+    // Ersteller (ältere Seiten ohne createdBy: alle)
+    const darf = (page) => !page.createdBy || page.createdBy === me.id;
 
     if (nrRaw === undefined && m === 'GET') {
         const all = await Promise.all((await pageNrs(wiki)).map((n) => readPage(wiki, n).catch(() => null)));
-        return json(res, 200, all.filter(Boolean).map(({ nr, title, x, y }) => ({ nr, title, x, y })).sort((a, b) => a.nr - b.nr));
+        // Versteckte Pins sieht nur der Ersteller; für alle anderen ist das Abenteuer ohne Ort
+        return json(res, 200, all.filter(Boolean).map(({ nr, title, x, y, versteckt = false, ...p }) => {
+            const meins = darf(p);
+            return { nr, title, ...(versteckt && !meins ? { x: null, y: null } : { x, y, versteckt }), meins };
+        }).sort((a, b) => a.nr - b.nr));
     }
     if (nrRaw === undefined && m === 'POST') {
         const body = await readJson(req);
         const xy = pos(body);
         const page = await serial(async () => {
             await mkdir(wiki, { recursive: true });
-            return writePage(wiki, stamp({ nr: Math.max(0, ...await pageNrs(wiki)) + 1, title: str(body.title).trim(), ...xy, blocks: [] }));
+            return writePage(wiki, stamp({
+                nr: Math.max(0, ...await pageNrs(wiki)) + 1, title: str(body.title).trim(), ...xy, blocks: [], createdBy: me.id
+            }));
         });
         return json(res, 201, page);
     }
@@ -341,6 +349,15 @@ async function spieleApi(req, res, url, me) {
     if (nrRaw !== undefined && sub === 'pos' && m === 'PUT') {
         const xy = pos(await readJson(req));
         return json(res, 200, await serial(async () => writePage(wiki, { ...await readPage(wiki, nr), ...xy })));
+    }
+    if (nrRaw !== undefined && sub === 'versteckt' && m === 'PUT') {
+        const { versteckt } = await readJson(req);
+        if (typeof versteckt !== 'boolean') throw new HttpError(400, 'versteckt fehlt');
+        return json(res, 200, await serial(async () => {
+            const page = await readPage(wiki, nr);
+            if (!darf(page)) throw new HttpError(403, 'Nur der Ersteller kann den Pin verstecken');
+            return writePage(wiki, { ...page, versteckt });
+        }));
     }
     if (nrRaw !== undefined && !sub && m === 'DELETE') {
         await serial(async () => {
