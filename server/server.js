@@ -373,27 +373,51 @@ async function spieleApi(req, res, url, me) {
 
 // ---- Galerie ($DATA/files) ----
 
-async function listDir(dir) {
-    const names = (await readdir(dir)).filter((n) => !n.startsWith('.'));
+// Wer eine Datei hochgeladen hat: <ordner>/.owners.json { "<name>": "<Chatto-User-ID>" }; nur der darf sie löschen
+const ownersFile = (dir) => join(dir, '.owners.json');
+const readOwners = (dir) => readFile(ownersFile(dir), 'utf8').then(JSON.parse, () => ({}));
+async function setOwner(dir, name, id) {
+    const owners = await readOwners(dir);
+    if (id) owners[name] = id; else delete owners[name];
+    const tmp = ownersFile(dir) + '.tmp';
+    await writeFile(tmp, JSON.stringify(owners, null, 2));
+    await rename(tmp, ownersFile(dir));
+}
+
+async function listDir(dir, me) {
+    const all = await readdir(dir);
+    const owners = me && all.includes('.owners.json') ? await readOwners(dir) : {};
+    const names = all.filter((n) => !n.startsWith('.'));
+    // thumb: es gibt ein Vorschaubild in .thumbs/ (sonst baut es der Browser nach)
+    const thumbs = new Set(all.includes('.thumbs') ? await readdir(join(dir, '.thumbs')).catch(() => []) : []);
     const entries = await Promise.all(names.map(async (name) => {
         const s = await stat(join(dir, name)).catch(() => null);
         if (!s) return null;
         return s.isDirectory()
             ? { name, type: 'directory', mtime: s.mtime.toUTCString() }
-            : { name, type: 'file', mtime: s.mtime.toUTCString(), size: s.size };
+            : { name, type: 'file', mtime: s.mtime.toUTCString(), size: s.size, thumb: thumbs.has(name + '.webp'), meins: !!me && owners[name] === me.id };
     }));
     return entries.filter(Boolean);
 }
 
-async function files(req, res, url) {
+async function files(req, res, url, me) {
     const raw = url.pathname.slice('/files'.length);
-    if (req.method === 'PUT') return upload(req, res, raw);
+    if (req.method === 'PUT') return upload(req, res, raw, me);
     if (req.method === 'DELETE') {
-        // Einziges DELETE: Beschriftung der Karte entfernen
+        // Beschriftung der Karte oder eine Datei in einem Spiel-Ordner (samt Vorschaubild); keine Ordner
         const target = safePath(filesDir, raw, true);
         const parts = target.slice(filesDir.length + 1).split(sep);
-        if (parts.length !== 3 || parts[1] !== '.karte' || parts[2] !== 'overlay.svg') throw new HttpError(405);
-        await unlink(target).catch(() => { throw new HttpError(404); });
+        const overlay = parts.length === 3 && parts[1] === '.karte' && parts[2] === 'overlay.svg';
+        if (!overlay && (parts.length < 2 || parts[1] === '.karte' || parts[1] === '.wiki' || raw.endsWith('/'))) throw new HttpError(405);
+        if (!(await stat(target).catch(() => null))?.isFile()) throw new HttpError(404);
+        const dir = resolve(target, '..'), name = parts.at(-1);
+        if (overlay) await unlink(target);
+        else await serial(async () => {
+            if ((await readOwners(dir))[name] !== me.id) throw new HttpError(403, 'Nur wer die Datei hochgeladen hat, darf sie löschen');
+            await unlink(target);
+            await unlink(join(dir, '.thumbs', name + '.webp')).catch(() => {});
+            await setOwner(dir, name, null);
+        });
         res.writeHead(204);
         return res.end();
     }
@@ -403,13 +427,13 @@ async function files(req, res, url) {
             res.writeHead(301, { Location: url.pathname + '/' });
             return res.end();
         }
-        return json(res, 200, await listDir(target));
+        return json(res, 200, await listDir(target, me));
     }
     return sendFile(req, res, target, 'no-cache', true);
 }
 
 /** PUT /files/…: Spiel-Dateien, .thumbs, .karte (feste Namen, überschreibbar), .wiki/<nr>/<name> */
-async function upload(req, res, raw) {
+async function upload(req, res, raw, me) {
     const target = safePath(filesDir, raw, true, true);
     if (raw.endsWith('/')) throw new HttpError(400);
     const parts = target.slice(filesDir.length + 1).split(sep);
@@ -433,6 +457,7 @@ async function upload(req, res, raw) {
         overwrite = true;
     } else if (!await isDir(dir)) throw new HttpError(404, 'Ordner fehlt');
     await receive(req, target, overwrite);
+    if (parts[1] !== '.karte' && parts[1] !== '.wiki' && parts.at(-2) !== '.thumbs') await serial(() => setOwner(dir, name, me.id));
     // Genau ein Kartenbild: die anderen karte.* weg, die alte Vorschau auch (die neue lädt der Browser danach)
     if (parts[1] === '.karte' && karteRe.test(name)) {
         for (const n of await readdir(dir)) if ((karteRe.test(n) && n !== name) || n === 'vorschau.webp') await unlink(join(dir, n)).catch(() => {});
@@ -492,7 +517,7 @@ createServer(async (req, res) => {
             if (/^\/api\/spiele(\/|$)/.test(p)) return await spieleApi(req, res, url, me);
             throw new HttpError(404);
         }
-        if (area === 'files' && (read || req.method === 'PUT' || req.method === 'DELETE')) return await files(req, res, url);
+        if (area === 'files' && (read || req.method === 'PUT' || req.method === 'DELETE')) return await files(req, res, url, me);
         if (read) return await thumb(req, res, url);
         throw new HttpError(405);
     } catch (e) {

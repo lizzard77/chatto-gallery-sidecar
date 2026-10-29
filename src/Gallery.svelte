@@ -2,9 +2,11 @@
   // Dateien eines Spiels: liest Ordnerlisten als JSON unter /files/<Spiel>/ und zeigt Unterordner
   // als Karten, PDFs/Dokumente als Buttons und Bilder als Raster. Ein PDF öffnet sich als
   // #/<Spiel>/dateien/Ordner/Datei.pdf (ohne Schrägstrich am Ende) im PDF-Viewer.
-  // Hochladen per Knopf oder Drag & Drop; für Bilder baut der Browser gleich ein Vorschaubild.
-  import { getJson, upload, enc } from './api.js';
+  // Hochladen per Knopf oder Drag & Drop; für Bilder und PDFs baut der Browser gleich ein Vorschaubild
+  // (fehlende auch nachträglich beim Anzeigen). Eigene Uploads lassen sich über ✕ löschen.
+  import { api, getJson, upload, enc } from './api.js';
   import { makeThumb } from './thumb.js';
+  import { pdfThumb } from './pdfviewer.js';
   import PdfOverlay from './PdfOverlay.svelte';
   import Lightbox from './Lightbox.svelte';
 
@@ -25,9 +27,10 @@
   const fileHref = (segments) => `#/${enc(spiel)}/dateien/${enc(...segments)}`;
   const folderHref = (segments) => fileHref(segments) + (segments.length ? '/' : '');
   const rawUrl = (segments) => `/files/${enc(spiel, ...segments)}`;
-  const thumbUrl = (segments, entry) => THUMBABLE.test(entry.name)
-    ? `/thumb/${enc(spiel, ...segments)}?v=${encodeURIComponent(entry.mtime || '')}`
+  const thumbUrl = (segments, entry) => entry.thumb || THUMBABLE.test(entry.name)
+    ? `/thumb/${enc(spiel, ...segments)}?v=${encodeURIComponent(entry.mtime || '')}${entry.thumb ? '' : '-'}`
     : rawUrl(segments);
+  const thumbPut = (segments) => rawUrl([...segments.slice(0, -1), '.thumbs', `${segments.at(-1)}.webp`]);
 
   function formatSize(bytes) {
     if (!bytes) return '';
@@ -58,6 +61,7 @@
   let error = $state('');
   let loaded = $state(false);
   let folders = $state([]);
+  let pdfs = $state.raw([]);
   let docs = $state.raw([]);
   let images = $state.raw([]);
   let lightbox = $state(null);
@@ -77,12 +81,14 @@
     if (!current()) return; // inzwischen weiternavigiert
     const files = entries.filter((e) => e.type === 'file').sort(byName);
     error = '';
-    // PDFs zuerst, dann andere Dateien
-    docs = files.filter((e) => !IMAGE.test(e.name))
-      .sort((a, b) => Number(PDF.test(b.name)) - Number(PDF.test(a.name)) || byName(a, b))
-      .map((e) => ({ ...e, pdf: PDF.test(e.name), url: rawUrl([...segs, e.name]), href: fileHref([...segs, e.name]) }));
+    // PDFs als Kacheln mit Vorschau der ersten Seite, andere Dateien als Knöpfe
+    pdfs = files.filter((e) => PDF.test(e.name))
+      .map((e) => ({ ...e, url: rawUrl([...segs, e.name]), href: fileHref([...segs, e.name]), thumb: e.thumb ? thumbUrl([...segs, e.name], e) : null }));
+    docs = files.filter((e) => !IMAGE.test(e.name) && !PDF.test(e.name))
+      .map((e) => ({ ...e, url: rawUrl([...segs, e.name]) }));
     images = files.filter((e) => IMAGE.test(e.name))
-      .map((e) => ({ name: e.name, url: rawUrl([...segs, e.name]), thumb: thumbUrl([...segs, e.name], e) }));
+      .map((e) => ({ name: e.name, meins: e.meins, url: rawUrl([...segs, e.name]), thumb: thumbUrl([...segs, e.name], e) }));
+    nachbauen(segs, files.filter((e) => !e.thumb && (PDF.test(e.name) || THUMBABLE.test(e.name))));
     folders = entries.filter((e) => e.type === 'directory').sort(byName)
       .map((e) => ({ name: e.name, href: folderHref([...segs, e.name]), cover: null, meta: '' }));
     // Titelbild und Zähler der Ordnerkarten kommen nachträglich
@@ -92,6 +98,35 @@
     }
     loaded = true;
     if (scroll) window.scrollTo(0, 0);
+  }
+
+  // Fehlende Vorschaubilder (ältere Uploads, per scp kopierte Dateien) im Browser bauen, eins nach dem anderen
+  let baut = Promise.resolve();
+  function nachbauen(segs, entries) {
+    for (const e of entries) baut = baut.then(async () => {
+      if (enc(spiel, ...segs) !== enc(spiel, ...dir)) return;
+      const segments = [...segs, e.name];
+      const blob = PDF.test(e.name) ? await pdfThumb(rawUrl(segments))
+        : await fetch(rawUrl(segments)).then((r) => (r.ok ? r.blob() : null)).then((b) => b && makeThumb(b)).catch(() => null);
+      if (!blob || !await upload(thumbPut(segments), blob).then(() => true, () => false)) return;
+      const thumb = thumbUrl(segments, { ...e, thumb: true });
+      listings.delete(enc(spiel, ...segs));
+      if (PDF.test(e.name)) pdfs = pdfs.map((p) => (p.name === e.name ? { ...p, thumb } : p));
+      else images = images.map((i) => (i.name === e.name ? { ...i, thumb } : i));
+    }).catch(() => {});
+  }
+
+  async function loeschen(name) {
+    if (!confirm(`„${name}“ wirklich löschen?`)) return;
+    const segs = dir;
+    try {
+      await api(rawUrl([...segs, name]), { method: 'DELETE' });
+      status = '';
+    } catch (e) {
+      status = `Fehler beim Löschen: ${e.message}`;
+    }
+    listings.clear();
+    load(segs, false);
   }
 
   function summarize(segs, entries) {
@@ -134,9 +169,10 @@
       for (const [i, file] of files.entries()) {
         status = `Lade ${i + 1}/${files.length} hoch …`;
         const name = await uploadUnique(segs, file);
-        const blob = THUMBABLE.test(name) && await makeThumb(file);
+        const blob = THUMBABLE.test(name) ? await makeThumb(file)
+          : PDF.test(name) ? await pdfThumb(await file.arrayBuffer()) : null;
         // ohne Vorschaubild geht's auch
-        if (blob) await upload(rawUrl([...segs, '.thumbs', `${name}.webp`]), blob).catch(() => {});
+        if (blob) await upload(thumbPut([...segs, name]), blob).catch(() => {});
       }
       status = '';
     } catch (e) {
@@ -207,26 +243,46 @@
   {#if error}
     <p class="error">{error}</p>
   {:else if loaded}
-    {#if docs.length}
-      <h2 class="section-title">{docs.length === 1 ? 'Dokument' : 'Dokumente'}</h2>
-      <div class="docs">
-        {#each docs as d (d.name)}
-          <a class={d.pdf ? 'doc' : 'doc other'} href={d.pdf ? d.href : d.url}
-            target={d.pdf ? undefined : '_blank'} rel="noopener">
-            <span aria-hidden="true">{d.pdf ? '📄' : '📎'}</span>{stripExt(d.name)}<span class="size">{formatSize(d.size)}</span>
-          </a>
-        {/each}
-      </div>
+    {#if pdfs.length || docs.length}
+      <h2 class="section-title">{pdfs.length + docs.length === 1 ? 'Dokument' : 'Dokumente'}</h2>
+      {#if pdfs.length}
+        <div class="pdfs">
+          {#each pdfs as d (d.name)}
+            <div class="kachel">
+              <a class="pdf" href={d.href}>
+                <span class="seite">{#if d.thumb}<img src={d.thumb} alt="" loading="lazy">{:else}<span aria-hidden="true">📄</span>{/if}</span>
+                <span class="name">{stripExt(d.name)}</span><span class="size">{formatSize(d.size)}</span>
+              </a>
+              {#if d.meins}<button class="del" type="button" title="Löschen" aria-label="{d.name} löschen" onclick={() => loeschen(d.name)}>✕</button>{/if}
+            </div>
+          {/each}
+        </div>
+      {/if}
+      {#if docs.length}
+        <div class="docs">
+          {#each docs as d (d.name)}
+            <span class="kachel">
+              <a class="doc other" href={d.url} target="_blank" rel="noopener">
+                <span aria-hidden="true">📎</span>{stripExt(d.name)}<span class="size">{formatSize(d.size)}</span>
+              </a>
+              {#if d.meins}<button class="del" type="button" title="Löschen" aria-label="{d.name} löschen" onclick={() => loeschen(d.name)}>✕</button>{/if}
+            </span>
+          {/each}
+        </div>
+      {/if}
     {/if}
     {#if images.length}
       <h2 class="section-title">Bilder</h2>
       <div class="images">
         {#each images as img, i (img.name)}
-          <button class="thumb" type="button" title={stripExt(img.name)} onclick={() => (lightbox = i)}>
-            <!-- HEIC & Co. kann der Browser evtl. nicht – dann zumindest das Original versuchen -->
-            <img src={img.thumb} alt={stripExt(img.name)} loading="lazy"
-              onerror={(ev) => { if (!ev.target.dataset.fallback) { ev.target.dataset.fallback = '1'; ev.target.src = img.url; } }}>
-          </button>
+          <div class="kachel">
+            <button class="thumb" type="button" title={stripExt(img.name)} onclick={() => (lightbox = i)}>
+              <!-- HEIC & Co. kann der Browser evtl. nicht – dann zumindest das Original versuchen -->
+              <img src={img.thumb} alt={stripExt(img.name)} loading="lazy"
+                onerror={(ev) => { if (!ev.target.dataset.fallback) { ev.target.dataset.fallback = '1'; ev.target.src = img.url; } }}>
+            </button>
+            {#if img.meins}<button class="del" type="button" title="Löschen" aria-label="{img.name} löschen" onclick={() => loeschen(img.name)}>✕</button>{/if}
+          </div>
         {/each}
       </div>
     {/if}
@@ -241,7 +297,7 @@
         {/each}
       </div>
     {/if}
-    {#if !docs.length && !images.length && !folders.length}
+    {#if !pdfs.length && !docs.length && !images.length && !folders.length}
       <p class="empty">Dieser Ordner ist leer.{#if canUpload} Dateien hierher ziehen oder „Hochladen“ wählen.{/if}</p>
     {/if}
   {/if}

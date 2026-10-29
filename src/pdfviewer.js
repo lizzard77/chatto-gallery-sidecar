@@ -22,6 +22,35 @@ function loadPdfjs() {
   return pdfjsPromise;
 }
 
+/** Vorschaubild der ersten Seite als WebP (längste Seite `size` px); src = URL oder ArrayBuffer. null, wenn's nicht geht. */
+export async function pdfThumb(src, size = 480) {
+  let task;
+  try {
+    const pdfjs = await loadPdfjs();
+    task = pdfjs.getDocument({
+      ...(typeof src === 'string' ? { url: src } : { data: src }),
+      cMapUrl: `${VENDOR}cmaps/`,
+      cMapPacked: true,
+      standardFontDataUrl: `${VENDOR}standard_fonts/`,
+      wasmUrl: `${VENDOR}wasm/`,
+      iccUrl: `${VENDOR}iccs/`
+    });
+    const page = await (await task.promise).getPage(1);
+    const base = page.getViewport({ scale: 1 });
+    const viewport = page.getViewport({ scale: size / Math.max(base.width, base.height) });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(viewport.width);
+    canvas.height = Math.round(viewport.height);
+    await page.render({ canvas, viewport }).promise;
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/webp', 0.82));
+    return blob?.type === 'image/webp' ? blob : null;
+  } catch {
+    return null;
+  } finally {
+    task?.destroy();
+  }
+}
+
 /** Kleiner DOM-Baukasten: el('a', { href, onclick }, 'Text', kindElement, …) */
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);

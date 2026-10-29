@@ -202,6 +202,62 @@ a { color: inherit; }
 .gallery .doc:hover, .pdf-download:hover { background: var(--gold); color: var(--bg); }
 .gallery .doc .size { font-weight: 400; font-size: 12px; opacity: 0.75; }
 .gallery .doc.other { border-color: var(--border); background: var(--surface); }
+.gallery .pdfs + .docs { margin-top: 10px; }
+
+/* PDFs als Kacheln mit der ersten Seite */
+.gallery .pdfs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+}
+.gallery .pdf {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  text-decoration: none;
+}
+.gallery .pdf:hover { border-color: var(--gold); background: var(--surface-hover); }
+.gallery .pdf .seite {
+  aspect-ratio: 3 / 4;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: var(--gold-soft);
+  font-size: 34px;
+}
+.gallery .pdf .seite img { width: 100%; height: 100%; object-fit: cover; object-position: top; background: #fff; }
+.gallery .pdf .name { padding: 6px 8px 0; font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
+.gallery .pdf .size { padding: 0 8px 8px; font-size: 12px; color: var(--muted); }
+
+/* Löschen-Knopf oben rechts auf jeder Datei, sichtbar beim Darüberfahren (Touch: immer) */
+.gallery .kachel { position: relative; }
+.gallery span.kachel { display: inline-flex; }
+.gallery .del {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(5, 9, 18, 0.7);
+  color: #fff;
+  font-size: 13px;
+  line-height: 26px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.gallery span.kachel .del { top: -6px; right: -6px; width: 22px; height: 22px; line-height: 22px; font-size: 11px; }
+.gallery .kachel:hover .del, .gallery .del:focus-visible { opacity: 1; }
+.gallery .del:hover { background: #b33a2a; }
+@media (hover: none) { .gallery .del { opacity: 0.85; } }
 
 /* Bilder */
 .gallery .images {
@@ -218,6 +274,7 @@ a { color: inherit; }
   cursor: zoom-in;
   aspect-ratio: 1;
 }
+.gallery .kachel > .thumb { display: block; width: 100%; }
 .gallery .thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .gallery .thumb:hover { border-color: var(--gold); }
 
@@ -276,6 +333,7 @@ a { color: inherit; }
   .gallery { padding: 12px; }
   .gallery .folders { grid-template-columns: repeat(2, 1fr); gap: 8px; }
   .gallery .images { grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .gallery .pdfs { grid-template-columns: repeat(3, 1fr); gap: 6px; }
   .lightbox .lb-nav { display: none; }
   .lightbox[open] { grid-template-columns: 1fr; }
 }
