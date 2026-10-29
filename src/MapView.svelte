@@ -17,7 +17,7 @@
   let fehler = $state('');
   let laedt = $state(''); // Hinweis während des Hochladens
   let stufe = $state(0);
-  let modus = $state(''); // '' | 'setzen' | 'schieben' | 'bewegen'
+  let modus = $state(''); // '' | 'setzen' | 'schieben' | 'verstecken' | 'bewegen'
   let menue = $state(false); // Menü „Karte …" offen
   let rw = $state(0), rh = $state(0); // Größe des Rahmens
   let W = $state(0), H = $state(0); // natürliche Größe des Kartenbilds (0 bis es geladen ist)
@@ -227,6 +227,10 @@
         onclick={() => umschalten('schieben')}>
         <span class="lang">Pins</span> verschieben
       </button>
+      <button class="messing" class:an={modus === 'verstecken'} aria-pressed={modus === 'verstecken'} disabled={!mitOrt.some((p) => p.meins)}
+        onclick={() => umschalten('verstecken')}>
+        <span class="lang">Pins</span> verstecken
+      </button>
       <button class="messing hand" class:an={modus === 'bewegen'} aria-pressed={modus === 'bewegen'} disabled={!zuGross}
         title="Karte bewegen (oder mit der rechten Maustaste ziehen)" aria-label="Karte bewegen" onclick={() => umschalten('bewegen')}>
         ✋
@@ -266,16 +270,20 @@
       oncontextmenu={(e) => zuGross && e.preventDefault()}>
     <div class="flaeche">
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-    <div class="karte" class:setzen={modus === 'setzen'} class:schieben={modus === 'schieben'} class:bereit={breite}
+    <div class="karte" class:setzen={modus === 'setzen'} class:schieben={modus === 'schieben'} class:verstecken={modus === 'verstecken'} class:bereit={breite}
       style="width: {breite}px" bind:this={karte} onclick={kartenKlick}>
       <img src={info.karte} alt="Karte: {spiel}" draggable="false" bind:naturalWidth={W} bind:naturalHeight={H} />
       {#if info.overlay}<img class="labels" src={info.overlay} alt="" draggable="false" />{/if}
 
       {#each mitOrt as p (p.nr)}
-        <a class="pin" class:links={p.x > 0.78} class:versteckt={p.versteckt} href={wikiHref(p.nr)}
+        <a class="pin" class:links={p.x > 0.78} class:versteckt={p.versteckt} class:fremd={!p.meins} href={wikiHref(p.nr)}
           style="left: {p.x * 100}%; top: {p.y * 100}%" aria-label="Abenteuer {p.nr}: {p.title}"
           draggable="false"
-          onclick={(e) => modus && e.preventDefault()}
+          onclick={(e) => {
+            if (!modus) return;
+            e.preventDefault();
+            if (modus === 'verstecken' && p.meins) verstecken(p);
+          }}
           onpointerdown={(e) => greifen(e, p)} onpointermove={ziehen} onpointerup={loslassen} onpointercancel={loslassen}>
           <span class="nadel"></span>
           <Pin nr={p.nr} />
@@ -295,6 +303,8 @@
       <p class="hinweis">Klicke auf die Karte, wo das Abenteuer spielt. <small>(Esc bricht ab)</small></p>
     {:else if modus === 'schieben'}
       <p class="hinweis">Ziehe die Siegel an ihren neuen Ort. <small>(Esc beendet)</small></p>
+    {:else if modus === 'verstecken'}
+      <p class="hinweis">Klicke auf deine Siegel, um sie vor den anderen zu verstecken oder wieder zu zeigen. <small>(Esc beendet)</small></p>
     {:else if modus === 'bewegen'}
       <p class="hinweis">Ziehe die Karte, um den Ausschnitt zu verschieben. <small>(Esc beendet)</small></p>
     {/if}
@@ -601,6 +611,7 @@
   .auge:hover, .auge:focus-visible { opacity: 1; }
   .auge.zu { color: var(--s); opacity: 0.9; }
   .pin.versteckt :global(.siegel) { opacity: 0.45; }
+  .karte.verstecken .pin.fremd { opacity: 0.35; cursor: not-allowed; }
   .neuohneort { margin: 14px 0 0; text-align: center; }
 
   /* ---------- Dialog „Titel des Abenteuers" ---------- */
